@@ -79,7 +79,7 @@ class SystemDefinition:
         self.buildingBlockTypeList = []
         self.particleTypes = []
         self.interactions = Interactions()
-        #self.buildingBlockNumbers = []
+        # self.buildingBlockNumbers = []
         self.L = 0.
         self.kBT = 0.
         self.seed = 12345
@@ -213,7 +213,6 @@ def parserFunc():
     parser.add_argument('-f', '--save_file', action="store_true", default=False, help='save snaps of the clusters found')
 
     return parser
-
 
 
 
@@ -497,7 +496,7 @@ def InitializeSystem_OPENSEQ(params):
     Inter.potentials = Pots
     Inter.InitializeMatrix(n_t)
 
-    morse_rcut = 8./params.morse_a + params.morse_r0
+    morse_rcut = 8.0/params.morse_a + params.morse_r0
 
     # non-interacting particles: N
     # first interface:  A0-C0
@@ -545,7 +544,7 @@ def InitializeSystem_OPENSEQ(params):
     SystDef.particleTypes = PartTypes
     SystDef.interactions = Inter
     SystDef.concentration = params.concentration
-    SystDef.Lxyz = 10.
+    SystDef.Lxyz = 10.0
     SystDef.kBT = params.kT_brown
     SystDef.seed = rdm.randint(1, 1001)
     SystDef.basename = params.fnbase
@@ -604,9 +603,9 @@ def setup_system(SystDef):
 
     bb_tot = [bbA, bbB, bbC, bbAB, bbBC, bbCA, bbABC]
 
-    ref_q0A = jnp.array([bbCOM[0][0],bbCOM[0][1],bbCOM[0][2],0,0,0], dtype=jnp.float64) + 1e-14
-    ref_q0B = jnp.array([bbCOM[1][0],bbCOM[1][1],bbCOM[1][2],0,0,0], dtype=jnp.float64) + 1e-14
-    ref_q0C = jnp.array([bbCOM[2][0],bbCOM[2][1],bbCOM[2][2],0,0,0], dtype=jnp.float64) + 1e-14
+    ref_q0A = jnp.array([bbCOM[0][0], bbCOM[0][1], bbCOM[0][2], 0, 0, 0], dtype=jnp.float64) + 1e-14
+    ref_q0B = jnp.array([bbCOM[1][0], bbCOM[1][1], bbCOM[1][2], 0, 0, 0], dtype=jnp.float64) + 1e-14
+    ref_q0C = jnp.array([bbCOM[2][0], bbCOM[2][1], bbCOM[2][2], 0, 0, 0], dtype=jnp.float64) + 1e-14
 
     ref_q0AB = jnp.concatenate((ref_q0A, ref_q0B))
     ref_q0BC = jnp.concatenate((ref_q0B, ref_q0C))
@@ -837,6 +836,57 @@ def Calculate_Zc(key, energy_fn, euler_scheme, ref_q0, ref_ppos, BBlocks, sigma,
 def Calculate_yield_grancan(conc_list, Zc_list, Nc_list):
     Y_grancan = jnp.array([cl**Nc*Zc for (cl, Zc, Nc) in zip(conc_list, Zc_list, Nc_list)])
     return Y_grancan / jnp.sum(Y_grancan)
+
+
+def Calculate_concentrations(trimer_Z, trimer_conc, V):
+    conc_total_M = trimer_conc[0]
+    conc_total_N = trimer_conc[1]
+    conc_total_O = trimer_conc[2]
+
+    for guess in range(3):
+        if guess == 0:
+            trimer_log_concs_guess = jnp.array(  # guess all stay as monomers
+                [jnp.log(conc_total_M), jnp.log(conc_total_N), jnp.log(conc_total_O)] +
+                [-1] * 4)
+
+        elif guess == 1:
+            trimer_log_concs_guess = jnp.array(  # guess MN dimer forms mostly and O stays as monomer
+                [-1] * 2 + [jnp.log(conc_total_O)] + [jnp.log(conc_total_M)] + [-1] * 3)
+
+        elif guess == 2:
+            trimer_log_concs_guess = jnp.array(  # guess MNO trimer forms
+                [-1] * 6 + [jnp.log(conc_total_M)])
+
+        else:
+            trimer_log_concs_guess = jnp.array(  # agnostic guess
+                [jnp.log(conc_total_M), jnp.log(conc_total_N), jnp.log(conc_total_O)] +
+                [jnp.log(conc_total_M), jnp.log(conc_total_N), jnp.log(conc_total_O)] +
+                [jnp.log(conc_total_M)])
+
+        #print(guess, "log conc guess", trimer_log_concs_guess)
+
+        trimer_concs_sol = jnp.exp(fsolve(
+            all_eqs, trimer_log_concs_guess, args=(
+                conc_total_M, conc_total_N, conc_total_O, trimer_Z, V),
+            # maxfev=(100*(7+1) * 20 ), xtol=1.49012e-08 / 20#, factor=0.1
+        ))
+
+        # Check that we were able to satisfy the equations
+        trimer_concs_check = all_eqs(  # should be zero if the solution we found is a real solution
+            jnp.log(trimer_concs_sol),
+            conc_total_M, conc_total_N, conc_total_O, trimer_Z, V)
+
+        print("trimer_concs_check",trimer_concs_check)
+
+        if not jnp.all(jnp.isclose(trimer_concs_check, 0, atol=1e-10)):
+            print('Was not able to satisfy all the equations simultaneously for guess # ' + str(guess))
+        else:
+            #break
+            print("guess",guess)
+            return trimer_concs_sol
+
+    return trimer_concs_sol
+
 
 def Full_Calculation(params, systdef):
 
