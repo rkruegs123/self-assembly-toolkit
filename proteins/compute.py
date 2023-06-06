@@ -4,6 +4,8 @@ import random as rdm
 import pdb
 import pandas as pd
 import scipy as osp
+import tracemalloc
+import time
 
 import jax.numpy as jnp
 from jax import jit, grad, vmap, value_and_grad, hessian, jacfwd, jacrev
@@ -18,6 +20,8 @@ from potentials import *
 import transformations
 from jax_transformations3d import jax_transformations3d as jts
 
+
+calc_TRAP = False # if false, will calculate for the trimer
 
 class ParticleType:
     def __init__(self, typeString='AA', radius=1.0):
@@ -161,16 +165,15 @@ class CParams:
 
     N = [8, 8, 8]
 
-
-    """
-    # when running PFL
-    BBtypes = ['A', 'B']
-    topology =  [[0, 1]]
-    aa_interf = [4]
-    N = [8, 8]
-    """
-
     sigma = [1, 1, 1, 1, 1, 1, 3]
+
+    if calc_TRAP:
+        # when running PFL
+        BBtypes = ['A', 'B']
+        topology =  [[0, 1]]
+        aa_interf = [4]
+        N = [8, 8]
+
 
     concentration = 0.000001
     ls = 150.
@@ -420,6 +423,91 @@ def InitBuildingBlock_OPENSEQ_YIA(params):
     return (positions, types, mass, evals_I, radii, scores, pos_COM)
 
 
+def InitBuildingBlock_OPENSEQ_PFL(params):
+
+    # building block types specified in params
+    bbt = params.BBtypes
+    Nbbt = len(bbt)
+
+    # prepare array for building block amino acids positions
+    pos = []
+
+    for X in bbt:
+        input_f = params.inputfile + X + '.pos'
+        temp_pos = np.loadtxt(input_f, usecols=[1,2,3])
+        pos.append(temp_pos)
+
+    pos = np.array(pos, dtype=object)
+
+    pos_COM = [np.mean(pos[i],axis=0) for i in range(Nbbt)]
+
+    posA = pos[0] - pos_COM[0]
+    posB = pos[1] - pos_COM[1]
+
+    # neutral particle types N
+    typA = ['A' for i in range(len(pos[0]))]
+    typB = ['B' for i in range(len(pos[1]))]
+
+
+    # INTERFACE AB [0,1], 4 aa interface
+
+    data_AB = pd.read_csv('OPENSEQ/PFLA-PFLB', sep='\t')
+
+    data_AB = data_AB.dropna()
+
+    i_id = np.array([int(iid[:-2]) for iid in data_AB['i_id'].values])
+    j_id = np.array([int(jid[:-2]) for jid in data_AB['j_id'].values])
+
+    i_aa = np.array([iid[-2:] for iid in data_AB['i_id'].values])
+    j_aa = np.array([jid[-2:] for jid in data_AB['j_id'].values])
+
+    AB_scores = np.array(data_AB['p_sco'].values)
+    AB_scores = AB_scores[:params.aa_interf[0]]
+
+    aa_A = pos[0][i_id[:params.aa_interf[0]]-2]
+    aa_B = pos[1][j_id[:params.aa_interf[0]]-2]
+
+    AB_patch_pos = (aa_A + aa_B) / 2
+
+    posA1 = AB_patch_pos - pos_COM[0]
+    posB1 = AB_patch_pos - pos_COM[1]
+
+    typA1 = ['Xa_%s'%i for i in range(len(posA1))]
+    typB1 = ['Xb_%s'%i for i in range(len(posB1))]
+
+    ########
+
+    positionsA = np.vstack((posA, posA1))
+    positionsB = np.vstack((posB, posB1))
+
+    positions = np.array([positionsA, positionsB], dtype=object)
+
+    typesA = np.concatenate((typA, typA1))
+    typesB = np.concatenate((typB, typB1))
+
+    types = np.array([typesA, typesB], dtype=object)
+
+    massA = len(posA)
+    massB = len(posB)
+
+    mass = np.array([massA, massB])
+
+    evals_IA, evecs_IA = CalculatePrincipalMomentsOfInertia(posA)
+    evals_IB, evecs_IB = CalculatePrincipalMomentsOfInertia(posB)
+
+    evals_I = np.array([evals_IA, evals_IB])
+
+    radiiA = np.array([1 for i in range(len(positionsA))])
+    radiiB = np.array([1 for i in range(len(positionsB))])
+
+    radii = np.array([radiiA, radiiB], dtype=object)
+
+    scores = np.array([AB_scores])
+
+    return (positions, types, mass, evals_I, radii, scores, pos_COM)
+
+
+
 
 def InitializeSystem_OPENSEQ(params):
 
@@ -427,29 +515,25 @@ def InitializeSystem_OPENSEQ(params):
 
 
     ### TRIMERS
-    (p, t, m, I, r, s, pCOM) = InitBuildingBlock_OPENSEQ_YIA(params)
-    t_flat = np.concatenate((t[0], t[1], t[2]))
-    r_flat = np.concatenate((r[0], r[1], r[2]))
+    if not calc_TRAP:
+        (p, t, m, I, r, s, pCOM) = InitBuildingBlock_OPENSEQ_YIA(params)
+        t_flat = np.concatenate((t[0], t[1], t[2]))
+        r_flat = np.concatenate((r[0], r[1], r[2]))
 
-    print("MO X", s[0])
-    print("NO Y", s[1])
-    print("MN Z", s[2])
+        en_interf_X = np.sum(s[0])
+        en_interf_Y = np.sum(s[1])
+        en_interf_Z = np.sum(s[2])
+        en_tot = en_interf_X + en_interf_Y + en_interf_Z
 
-    en_interf_X = np.sum(s[0])
-    en_interf_Y = np.sum(s[1])
-    en_interf_Z = np.sum(s[2])
-    en_tot = en_interf_X + en_interf_Y + en_interf_Z
+        params.morse_D0_Z = (en_tot - en_interf_X*params.morse_D0_X - en_interf_Y*params.morse_D0_Y) / en_interf_Z
 
-    params.morse_D0_Z = (en_tot - en_interf_X*params.morse_D0_X - en_interf_Y*params.morse_D0_Y) / en_interf_Z
-
-    if params.morse_D0_Z < 0:
-        print("Error: DX too high!")
-        exit()
-
-    ### DIMERS
-    # (p, t, m, I, r, s, pCOM) = InitBuildingBlock_OPENSEQ_PFL(params)
-    # t_flat = np.concatenate((t[0], t[1]))
-    # r_flat = np.concatenate((r[0], r[1]))
+        if params.morse_D0_Z < 0:
+            print("Error: DX too high!")
+            exit()
+    else: ### DIMERS
+        (p, t, m, I, r, s, pCOM) = InitBuildingBlock_OPENSEQ_PFL(params)
+        t_flat = np.concatenate((t[0], t[1]))
+        r_flat = np.concatenate((r[0], r[1]))
 
     # List of unique types, the corresponding indices
     t_unique, i_unique, typeids = np.unique(t_flat, return_index=True, return_inverse=True)
@@ -578,69 +662,67 @@ def setup_system(SystDef):
 
 
     #### specific for a fully connected trimer!!! ####
+    if not calc_TRAP:
+        ref_pposA = ref_ppos[0]
+        ref_pposB = ref_ppos[1]
+        ref_pposC = ref_ppos[2]
 
-    ref_pposA = ref_ppos[0]
-    ref_pposB = ref_ppos[1]
-    ref_pposC = ref_ppos[2]
+        ref_pposAB = [ref_pposA, ref_pposB]
+        ref_pposBC = [ref_pposB, ref_pposC]
+        ref_pposCA = [ref_pposC, ref_pposA]
 
-    ref_pposAB = [ref_pposA, ref_pposB]
-    ref_pposBC = [ref_pposB, ref_pposC]
-    ref_pposCA = [ref_pposC, ref_pposA]
+        ref_pposABC = [ref_pposA, ref_pposB, ref_pposC]
 
-    ref_pposABC = [ref_pposA, ref_pposB, ref_pposC]
+        ref_ppos_tot = [[ref_pposA], [ref_pposB], [ref_pposC], ref_pposAB, ref_pposBC, ref_pposCA, ref_pposABC]
 
-    ref_ppos_tot = [[ref_pposA], [ref_pposB], [ref_pposC], ref_pposAB, ref_pposBC, ref_pposCA, ref_pposABC]
+        bbA = jnp.array([ref_id[0]])
+        bbB = jnp.array([ref_id[1]])
+        bbC = jnp.array([ref_id[2]])
 
-    bbA = jnp.array([ref_id[0]])
-    bbB = jnp.array([ref_id[1]])
-    bbC = jnp.array([ref_id[2]])
+        bbAB = jnp.squeeze(jnp.vstack((bbA, bbB)))
+        bbBC = jnp.squeeze(jnp.vstack((bbB, bbC)))
+        bbCA = jnp.squeeze(jnp.vstack((bbC, bbA)))
 
-    bbAB = jnp.squeeze(jnp.vstack((bbA, bbB)))
-    bbBC = jnp.squeeze(jnp.vstack((bbB, bbC)))
-    bbCA = jnp.squeeze(jnp.vstack((bbC, bbA)))
+        bbABC = jnp.squeeze(jnp.vstack((bbA, bbB, bbC)))
 
-    bbABC = jnp.squeeze(jnp.vstack((bbA, bbB, bbC)))
+        bb_tot = [bbA, bbB, bbC, bbAB, bbBC, bbCA, bbABC]
 
-    bb_tot = [bbA, bbB, bbC, bbAB, bbBC, bbCA, bbABC]
+        ref_q0A = jnp.array([bbCOM[0][0], bbCOM[0][1], bbCOM[0][2], 0, 0, 0], dtype=jnp.float64) + 1e-14
+        ref_q0B = jnp.array([bbCOM[1][0], bbCOM[1][1], bbCOM[1][2], 0, 0, 0], dtype=jnp.float64) + 1e-14
+        ref_q0C = jnp.array([bbCOM[2][0], bbCOM[2][1], bbCOM[2][2], 0, 0, 0], dtype=jnp.float64) + 1e-14
 
-    ref_q0A = jnp.array([bbCOM[0][0], bbCOM[0][1], bbCOM[0][2], 0, 0, 0], dtype=jnp.float64) + 1e-14
-    ref_q0B = jnp.array([bbCOM[1][0], bbCOM[1][1], bbCOM[1][2], 0, 0, 0], dtype=jnp.float64) + 1e-14
-    ref_q0C = jnp.array([bbCOM[2][0], bbCOM[2][1], bbCOM[2][2], 0, 0, 0], dtype=jnp.float64) + 1e-14
+        ref_q0AB = jnp.concatenate((ref_q0A, ref_q0B))
+        ref_q0BC = jnp.concatenate((ref_q0B, ref_q0C))
+        ref_q0CA = jnp.concatenate((ref_q0C, ref_q0A))
 
-    ref_q0AB = jnp.concatenate((ref_q0A, ref_q0B))
-    ref_q0BC = jnp.concatenate((ref_q0B, ref_q0C))
-    ref_q0CA = jnp.concatenate((ref_q0C, ref_q0A))
+        ref_q0ABC = jnp.concatenate((ref_q0A, ref_q0B, ref_q0C))
 
-    ref_q0ABC = jnp.concatenate((ref_q0A, ref_q0B, ref_q0C))
-
-    ref_q0_tot = [ref_q0A, ref_q0B, ref_q0C, ref_q0AB, ref_q0BC, ref_q0CA, ref_q0ABC]
+        ref_q0_tot = [ref_q0A, ref_q0B, ref_q0C, ref_q0AB, ref_q0BC, ref_q0CA, ref_q0ABC]
 
 
 
     #### specific for a dimer!!! ####
-    """
-    ref_pposA = ref_ppos[0]
-    ref_pposB = ref_ppos[1]
+    else:
+        ref_pposA = ref_ppos[0]
+        ref_pposB = ref_ppos[1]
 
-    ref_pposAB = [ref_pposA, ref_pposB]
+        ref_pposAB = [ref_pposA, ref_pposB]
 
-    ref_ppos_tot = [[ref_pposA], [ref_pposB], ref_pposAB]
+        ref_ppos_tot = [[ref_pposA], [ref_pposB], ref_pposAB]
 
-    bbA = jnp.array([ref_id[0]])
-    bbB = jnp.array([ref_id[1]])
+        bbA = jnp.array([ref_id[0]])
+        bbB = jnp.array([ref_id[1]])
 
-    bbAB = jnp.squeeze(jnp.vstack((bbA, bbB)))
+        bbAB = jnp.squeeze(jnp.vstack((bbA, bbB)))
 
-    bb_tot = [bbA, bbB, bbAB]
+        bb_tot = [bbA, bbB, bbAB]
 
-    ref_q0A = jnp.array([bbCOM[0][0], bbCOM[0][1], bbCOM[0][2], 0, 0, 0], dtype=jnp.float64) + 1e-14
-    ref_q0B = jnp.array([bbCOM[1][0], bbCOM[1][1], bbCOM[1][2], 0, 0, 0], dtype=jnp.float64) + 1e-14
+        ref_q0A = jnp.array([bbCOM[0][0], bbCOM[0][1], bbCOM[0][2], 0, 0, 0], dtype=jnp.float64) + 1e-14
+        ref_q0B = jnp.array([bbCOM[1][0], bbCOM[1][1], bbCOM[1][2], 0, 0, 0], dtype=jnp.float64) + 1e-14
 
-    ref_q0AB = jnp.concatenate((ref_q0A, ref_q0B))
+        ref_q0AB = jnp.concatenate((ref_q0A, ref_q0B))
 
-    ref_q0_tot = [ref_q0A, ref_q0B, ref_q0AB]
-    """
-
+        ref_q0_tot = [ref_q0A, ref_q0B, ref_q0AB]
 
 
 
@@ -795,7 +877,7 @@ def setup_variable_transformation(energy_fn, euler_scheme, q0, ppos, BBlocks):
     return f, num_zero_modes, zvib
 
 
-def GetJmean_method1(f, key, Nbb, nrandom = 100000, euler_scheme='sxyz'):
+def GetJmean_method1(f, key, Nbb, nrandom=100000, euler_scheme='sxyz'):
     def random_euler_angles(key, euler_scheme):
         quat = jts.random_quaternion(None, key)
         return jnp.array(jts.euler_from_quaternion(quat, euler_scheme))
@@ -823,8 +905,18 @@ def Calculate_Zc(key, energy_fn, euler_scheme, ref_q0, ref_ppos, BBlocks, sigma,
     """
     f, num_zero_modes, zvib = setup_variable_transformation(energy_fn, euler_scheme, ref_q0, ref_ppos, BBlocks)
 
+    start = time.time()
+    tracemalloc.start()
     Js_mean, Js_error = GetJmean_method1(f, key, len(BBlocks))
+    traced_mem = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
     Jtilde = 8.0*(jnp.pi**2)*Js_mean
+    end = time.time()
+
+    print(f"----Resource Usage:----")
+    print(f"Time: {np.round(end - start, 2)}")
+    print(f"Memory (current): {np.round(traced_mem[0] / 8e6, 3)} MB")
+    print(f"Memory (peak): {np.round(traced_mem[1] / 8e6, 3)} MB")
 
     E0 = energy_fn(ref_q0, euler_scheme, ref_ppos, BBlocks)
     boltzmann_weight = jnp.exp(-E0/kBT)
@@ -863,7 +955,7 @@ def Calculate_concentrations(trimer_Z, trimer_conc, V):
                 [jnp.log(conc_total_M), jnp.log(conc_total_N), jnp.log(conc_total_O)] +
                 [jnp.log(conc_total_M)])
 
-        #print(guess, "log conc guess", trimer_log_concs_guess)
+        # print(guess, "log conc guess", trimer_log_concs_guess)
 
         trimer_concs_sol = jnp.exp(fsolve(
             all_eqs, trimer_log_concs_guess, args=(
@@ -881,7 +973,7 @@ def Calculate_concentrations(trimer_Z, trimer_conc, V):
         if not jnp.all(jnp.isclose(trimer_concs_check, 0, atol=1e-10)):
             print('Was not able to satisfy all the equations simultaneously for guess # ' + str(guess))
         else:
-            #break
+            # break
             print("guess",guess)
             return trimer_concs_sol
 
@@ -903,6 +995,9 @@ def Full_Calculation(params, systdef):
 
 
     Nc = len(bb_list)
+
+    assert((Nc == 3 and calc_TRAP) or (Nc == 7 and not calc_TRAP))
+
     key = random.PRNGKey(0)
     split = random.split(key, Nc)
     Zc_list = []
@@ -932,22 +1027,21 @@ def Full_Calculation(params, systdef):
     pdb.set_trace()
     if Nc == 3:
         ZdimerOverZAZB = Zc_list[2] / (Zc_list[0]*Zc_list[1])
-
         yields = (1 + conc_list[0]*V*ZdimerOverZAZB + conc_list[1]*V*ZdimerOverZAZB - jnp.sqrt(4*conc_list[0]*V*ZdimerOverZAZB + (1+(-conc_list[0]+conc_list[1])*V*ZdimerOverZAZB)**2)) / (-1 + conc_list[0]*V*ZdimerOverZAZB + conc_list[1]*V*ZdimerOverZAZB + jnp.sqrt(4*conc_list[0]*V*ZdimerOverZAZB + (1 + (-conc_list[0] + conc_list[1])*V*ZdimerOverZAZB)**2))
-
     elif Nc == 7:
         conc_real = Calculate_concentrations(Zc_list, conc_list, V)
         yields = conc_real / jnp.sum(conc_real)
 
-    yields_wr = Calculate_yield_grancan(conc_list, Zc_list, Nc_list)
-
-    return yields, conc_real, yields_wr
+    # yields_wr = Calculate_yield_grancan(conc_list, Zc_list, Nc_list)
+    # return yields, conc_real, yields_wr
+    return yields
 
 
 
 if __name__ == "__main__":
 
     # python3 compute.py -i OPENSEQ/YIA_MNO_v3 -D 0.1 -c 0.00000001
+    # python3 compute.py -i OPENSEQ/PFLA_PFLB_v1 -D 0.1 -c 0.00000001
 
 
     params = CParams()
@@ -983,27 +1077,14 @@ if __name__ == "__main__":
     # file where the trajectory is saved
     params.fnbase = 'temp_results/%s_D0%s_c%s' % (args.string, str(args.morse_D0), str(args.conc))
 
-    # InitBuildingBlock_C3RK(params)
-    # InitBuildingBlock_RK597(params)
-
-
     systdef = InitializeSystem_OPENSEQ(params)
-    # systdef = InitializeSystem_dimers_tr(params)
-    # systdef = InitializeSystem_C3RK(params)
 
     pdb.set_trace()
 
-    Ys, Cs, Ywr = Full_Calculation(params, systdef)
-    # Ys = Full_Calculation(systdef)
-    # Ys, pc = Full_Calculation_can(params,systdef)
+    Ys = Full_Calculation(params, systdef)
 
-    for y, c, ywr in zip(Ys, Cs, Ywr):
-        print(y, c, ywr)
-
-
-    # print("\nYield",Ys)
-
-    # if np.sum(Cs) < params.concentration:
-    #     print("Solution not found")
-    # else:
-    #     print("So far so good")
+    if calc_TRAP:
+        print(f"Dimer Yield: {Ys}")
+    else:
+        for y in Ys:
+            print(y)
