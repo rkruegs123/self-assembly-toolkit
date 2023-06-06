@@ -10,7 +10,6 @@ from jax import jit, grad, vmap, value_and_grad, hessian, jacfwd, jacrev
 from jax.ops import index, index_add, index_update
 
 import potentials
-from potentials_jax import morseX_E
 from jax_transformations3d import jax_transformations3d as jts
 
 from jax.config import config
@@ -398,9 +397,8 @@ def setup_system(SystDef):
                         ID1 = SystDef.particleTypes[t1]
                         ID2 = SystDef.particleTypes[t2]
 
-                        # etemp = Inter.potentials[1].E(
-                        #     r, rmin, rmax, coeff[0], coeff[1], coeff[2], coeff[3])
-                        etemp = morseX_E(r, rmin, rmax, coeff[0], coeff[1], coeff[2], coeff[3])
+                        etemp = Inter.potentials[1].E(
+                            r, rmin, rmax, coeff[0], coeff[1], coeff[2], coeff[3])
 
                         tot_energy += etemp
 
