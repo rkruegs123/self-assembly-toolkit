@@ -7,4 +7,4 @@ Included in each directory is a snapshot of a prevoius version of this library t
 
 Currently, our model is not available in the form of a standalone python package.
 However, given sufficient demand, we will develop such a package.
-Please contact [brenner@seas.harvard.edu](mailto:brenner@seas.harvard.edu) if you are interested in using our model and would like to collaborate.
+Please contact [ryan_krueger@g.harvard.edu](mailto:ryan_krueger@g.harvard.edu) or [brenner@seas.harvard.edu](mailto:brenner@seas.harvard.edu) if you are interested in using our model and would like to collaborate.
