@@ -43,15 +43,15 @@ def CalculateMomentOfInertiaOffDiag(e1, e2, positions):
     return I
 
 def CalculatePrincipalMomentsOfInertia(positions):
-    Ixx = CalculateMomentOfInertiaDiag(np.array([1,0,0]), positions)
-    Iyy = CalculateMomentOfInertiaDiag(np.array([0,1,0]), positions)
-    Izz = CalculateMomentOfInertiaDiag(np.array([0,0,1]), positions)
+    Ixx = CalculateMomentOfInertiaDiag(np.array([1, 0, 0]), positions)
+    Iyy = CalculateMomentOfInertiaDiag(np.array([0, 1, 0]), positions)
+    Izz = CalculateMomentOfInertiaDiag(np.array([0, 0, 1]), positions)
 
-    Ixy = CalculateMomentOfInertiaOffDiag(np.array([1,0,0]), np.array([0,1,0]), positions)
-    Iyz = CalculateMomentOfInertiaOffDiag(np.array([0,1,0]), np.array([0,0,1]), positions)
-    Izx = CalculateMomentOfInertiaOffDiag(np.array([0,0,1]), np.array([1,0,0]), positions)
+    Ixy = CalculateMomentOfInertiaOffDiag(np.array([1, 0, 0]), np.array([0, 1, 0]), positions)
+    Iyz = CalculateMomentOfInertiaOffDiag(np.array([0, 1, 0]), np.array([0, 0, 1]), positions)
+    Izx = CalculateMomentOfInertiaOffDiag(np.array([0, 0, 1]), np.array([1, 0, 0]), positions)
 
-    I = np.array([[Ixx,Ixy,Izx], [Ixy,Iyy,Iyz], [Izx,Iyz,Izz]])
+    I = np.array([[Ixx, Ixy, Izx], [Ixy, Iyy, Iyz], [Izx, Iyz, Izz]])
 
     evals, evecs = np.linalg.eigh(I)
 
@@ -714,6 +714,8 @@ if __name__ == "__main__":
 
     Zs, Cs, Ys = Full_Calculation(systdef)
 
-    pdb.set_trace()
-
-    print("done")
+    for i, (z, c, y) in enumerate(zip(Zs, Cs, Ys)):
+        print(f"Assembly {i}:")
+        print(f"- Z: {z}")
+        print(f"- C: {c}")
+        print(f"- Y: {y}")
