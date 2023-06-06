@@ -579,8 +579,7 @@ if __name__ == "__main__":
 
     params.concentration = args.conc
 
-    # all_eb = np.linspace(4, 12, 6)
-    all_eb = np.linspace(4, 12, 20)
+    all_eb = np.linspace(4, 12, 8)
     all_yields = list()
 
     start = time.time()
@@ -589,7 +588,7 @@ if __name__ == "__main__":
         params.morse_D0 = d0
 
         # file where the trajectory is saved
-        params.fnbase = 'temp_results/%s_D0%s_c%s' % (args.string,str(args.morse_D0), str(args.conc))
+        params.fnbase = 'temp_results/%s_D0%s_c%s' % (args.string, str(args.morse_D0), str(args.conc))
 
         systdef = InitializeSystem_dimers_tr(params)
 
@@ -603,6 +602,8 @@ if __name__ == "__main__":
     print(f"Total execution: {end - start} seconds")
 
     plt.plot(all_eb, all_yields)
+    plt.ylabel("Dimers Yield")
+    plt.xlabel(r"$E_b$")
     plt.show()
 
     pdb.set_trace()
