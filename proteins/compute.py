@@ -21,8 +21,6 @@ import transformations
 from jax_transformations3d import jax_transformations3d as jts
 
 
-calc_TRAP = False # if false, will calculate for the trimer
-
 class ParticleType:
     def __init__(self, typeString='AA', radius=1.0):
         self.typeString = typeString
@@ -116,37 +114,6 @@ class SystemDefinition:
 
 
 # Parameters
-class CParams_dimer:
-    # these are all class variables, they do not change in
-    # different instances of the class CParams
-    N = [9, 9]
-    concentration = 0.001
-    ls = 10.
-
-    Ttot = 1e8      # actually total number of steps. Ttot_real=Ttot
-    Trec_data = 1000000
-    Trec_traj = 1000000
-    dT = 0.0001
-
-    rep_A = 500.0
-    rep_alpha = 2.5
-
-    morse_D0 = 10.
-    morse_D0_r = 1. # 1.0
-    morse_D0_g = 1. # 1.5
-    morse_D0_b = 1. # 2.0
-
-    morse_a = 5.0
-
-    morse_r0 = 0.
-
-    kT_brown = 1.0
-    # seed_brown = rdm.randint(1,1001)
-
-    fnbase = "test"
-
-
-# Parameters
 class CParams:
     # these are all class variables, they do not change in
     # different instances of the class CParams
@@ -166,13 +133,6 @@ class CParams:
     N = [8, 8, 8]
 
     sigma = [1, 1, 1, 1, 1, 1, 3]
-
-    if calc_TRAP:
-        # when running PFL
-        BBtypes = ['A', 'B']
-        topology =  [[0, 1]]
-        aa_interf = [4]
-        N = [8, 8]
 
 
     concentration = 0.000001
@@ -215,6 +175,9 @@ def parserFunc():
     parser.add_argument('-t', '--testing', action="store_true", default=False, help='put the simulation in testing mode')
     parser.add_argument('-f', '--save_file', action="store_true", default=False, help='save snaps of the clusters found')
 
+    parser.add_argument('--mode', choices=['PFL', 'TRAP'],
+                        help='Select PFL for the results presented in Figure 3 (i.e. the dimer) and TRAP for the results presented in Figure 4 (i.e. the trimer)')
+
     return parser
 
 
@@ -254,7 +217,7 @@ def CalculatePrincipalMomentsOfInertia(positions):
 
 
 
-def InitBuildingBlock_OPENSEQ_YIA(params):
+def InitBuildingBlock_OPENSEQ_YIA(params, calc_dimer):
 
     # building block types specified in params
     bbt = params.BBtypes
@@ -423,7 +386,7 @@ def InitBuildingBlock_OPENSEQ_YIA(params):
     return (positions, types, mass, evals_I, radii, scores, pos_COM)
 
 
-def InitBuildingBlock_OPENSEQ_PFL(params):
+def InitBuildingBlock_OPENSEQ_PFL(params, calc_dimer):
 
     # building block types specified in params
     bbt = params.BBtypes
@@ -509,14 +472,14 @@ def InitBuildingBlock_OPENSEQ_PFL(params):
 
 
 
-def InitializeSystem_OPENSEQ(params):
+def InitializeSystem_OPENSEQ(params, calc_dimer):
 
     Nbbt = len(params.BBtypes)
 
 
     ### TRIMERS
-    if not calc_TRAP:
-        (p, t, m, I, r, s, pCOM) = InitBuildingBlock_OPENSEQ_YIA(params)
+    if not calc_dimer:
+        (p, t, m, I, r, s, pCOM) = InitBuildingBlock_OPENSEQ_YIA(params, calc_dimer)
         t_flat = np.concatenate((t[0], t[1], t[2]))
         r_flat = np.concatenate((r[0], r[1], r[2]))
 
@@ -531,7 +494,7 @@ def InitializeSystem_OPENSEQ(params):
             print("Error: DX too high!")
             exit()
     else: ### DIMERS
-        (p, t, m, I, r, s, pCOM) = InitBuildingBlock_OPENSEQ_PFL(params)
+        (p, t, m, I, r, s, pCOM) = InitBuildingBlock_OPENSEQ_PFL(params, calc_dimer)
         t_flat = np.concatenate((t[0], t[1]))
         r_flat = np.concatenate((r[0], r[1]))
 
@@ -647,7 +610,7 @@ def ConvertToMatrix(mi, euler_scheme):
     return jnp.matmul(T, R)
 
 
-def setup_system(SystDef):
+def setup_system(SystDef, calc_dimer):
 
     BBt = SystDef.buildingBlockTypeList
     bbCOM = SystDef.posCOM
@@ -662,7 +625,7 @@ def setup_system(SystDef):
 
 
     #### specific for a fully connected trimer!!! ####
-    if not calc_TRAP:
+    if not calc_dimer:
         ref_pposA = ref_ppos[0]
         ref_pposB = ref_ppos[1]
         ref_pposC = ref_ppos[2]
@@ -980,7 +943,7 @@ def Calculate_concentrations(trimer_Z, trimer_conc, V):
     return trimer_concs_sol
 
 
-def Full_Calculation(params, systdef):
+def Full_Calculation(params, systdef, calc_dimer):
 
     # setup_system returns the energy function and three lists corresponding to:
     # - ref_q0: 6N-dimensional COM coordinates of the BBs in the structure
@@ -991,12 +954,12 @@ def Full_Calculation(params, systdef):
     N = 3
     V = N / conc
 
-    cluster_energy, ref_q0_list, ref_ppos_list, bb_list = setup_system(systdef)
+    cluster_energy, ref_q0_list, ref_ppos_list, bb_list = setup_system(systdef, calc_dimer)
 
 
     Nc = len(bb_list)
 
-    assert((Nc == 3 and calc_TRAP) or (Nc == 7 and not calc_TRAP))
+    assert((Nc == 3 and calc_dimer) or (Nc == 7 and not calc_dimer))
 
     key = random.PRNGKey(0)
     split = random.split(key, Nc)
@@ -1045,8 +1008,6 @@ if __name__ == "__main__":
 
 
     params = CParams()
-    # params = CParams_dimer()
-
 
     # RunMinimizeEnergy_overlap
     # -i --inputname : input file
@@ -1060,10 +1021,29 @@ if __name__ == "__main__":
     # list of the arguments of the parser
     args = parser.parse_args()
 
+    mode = args.mode
+    if mode == "PFL":
+        calc_dimer = True
+    elif mode == "TRAP":
+        calc_dimer = False
+    else:
+        raise RuntimeError(f"Invalid mode: {mode}")
+
+    if calc_dimer:
+        # when running PFL
+        params.BBtypes = ['A', 'B']
+        params.topology =  [[0, 1]]
+        params.aa_interf = [4]
+        params.N = [8, 8]
+
+        params.inputfile = "OPENSEQ/PFLA_PFLB_v1"
+    else:
+        params.inputfile = "OPENSEQ/YIA_MNO_v3"
+
     # input file from which to read the BB aa positions
     # must be of type
     # aa_index x_coord y_coord z_coord
-    params.inputfile = '%s' % (args.input_name)
+    # params.inputfile = '%s' % (args.input_name)
 
     params.concentration = args.conc
     params.morse_D0 = args.morse_D0
@@ -1077,13 +1057,11 @@ if __name__ == "__main__":
     # file where the trajectory is saved
     params.fnbase = 'temp_results/%s_D0%s_c%s' % (args.string, str(args.morse_D0), str(args.conc))
 
-    systdef = InitializeSystem_OPENSEQ(params)
+    systdef = InitializeSystem_OPENSEQ(params, calc_dimer)
 
-    pdb.set_trace()
+    Ys = Full_Calculation(params, systdef, calc_dimer)
 
-    Ys = Full_Calculation(params, systdef)
-
-    if calc_TRAP:
+    if calc_dimer:
         print(f"Dimer Yield: {Ys}")
     else:
         for y in Ys:
