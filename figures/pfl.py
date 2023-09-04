@@ -36,6 +36,7 @@ def run():
     FS = 22
 
     # Try them all in the same plot -- I think it's too much
+    plt.rcParams["mathtext.fontset"] = "cm"
     fig = plt.figure(figsize=[7, 7])  # default [6.4, 4.8]
     ax = fig.add_subplot(111)
 
@@ -50,7 +51,8 @@ def run():
             lab_d = ''
         ax.plot(D0s, dim[conc_str], '-', linewidth=3, color=conc_colors[conc_i], label=lab_d)
 
-    ax.set_xlabel(r'$D_0$', fontsize=FS)
+    # ax.set_xlabel(r'$D_0$', fontsize=FS)
+    ax.set_xlabel(r"$\epsilon/k_BT$", fontsize=FS)
     ax.set_ylabel(r'Dimers Yield', fontsize=FS)
 
     ax.tick_params('both', labelsize=FS)
@@ -60,7 +62,7 @@ def run():
                         ticks=np.linspace(0,1,num_conc),
                         orientation='horizontal')
     cbar.ax.set_xticklabels(concentrations_str_nice, fontsize=15, rotation=60)
-    cbar.set_label(label='Concentration', fontsize=FS)
+    cbar.set_label(label='Monomer Concentration', fontsize=FS)
 
     plt.show()
 

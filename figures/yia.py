@@ -6,8 +6,10 @@ import numpy as np
 
 
 
-
 def runB():
+
+    plt.rcParams.update({"mathtext.fontset": "cm"})
+
     df = pd.read_csv("data/yiaB.csv")
 
     new_df_schema = {
@@ -85,8 +87,8 @@ def runB():
             lab_M = 'M'
             lab_N = 'N'
             lab_O = 'O'
-            lab_MpNpO = 'M+N+O'
-            lab_MNpO = 'MN+O'
+            lab_MpNpO = 'M'
+            lab_MNpO = 'MN'
             lab_MN = 'MN'
             lab_MNO = 'MNO'
         else:
@@ -106,8 +108,11 @@ def runB():
                 linewidth=3, color=conc_colors[conc_i], label=lab_MNO)
 
 
-    ax.set_xlabel(r'$D_0$', fontsize=FS)
+    # ax.set_xlabel(r'$D_0$', fontsize=FS)
+
     ax.set_ylabel(r'$c_s/c_M^{tot}$', fontsize=FS)
+    # plt.rcParams["mathtext.fontset"] = "cm"
+    ax.set_xlabel(r"$\epsilon/k_BT$", fontsize=FS)
     ax.set_xlim([1.5, 6.5])
 
     ax.legend(fontsize=15, frameon=True)
@@ -119,12 +124,16 @@ def runB():
                         ticks=np.linspace(0, 1, num_conc),
                         orientation='horizontal')
     cbar.ax.set_xticklabels(concentrations_str_nice, fontsize=15, rotation=60)
-    cbar.set_label(label='$c_M^{tot}$', fontsize=FS)
+    cbar.set_label(label='Monomer Concentration', fontsize=FS)
 
     plt.show()
+    # plt.savefig("yiaB.svg", format="svg")
 
 
 def runC():
+    # plt.rcParams["mathtext.fontset"] = 'dejavusans'
+    plt.rcParams.update({"mathtext.fontset": "cm"})
+
     df = pd.read_csv("data/yiaC.csv")
 
     new_df_schema = {
@@ -154,9 +163,9 @@ def runC():
     lab_M = 'M'
     lab_N = 'N'
     lab_O = 'O'
-    lab_MpNpO = 'M+N+O'
-    lab_MNpO = 'MN+O'
-    lab_MOpN = 'MO+N'
+    lab_MpNpO = 'M'
+    lab_MNpO = 'MN'
+    lab_MOpN = 'MO'
     lab_MN = 'MN'
     lab_MO = 'MO'
     lab_NO = 'NO'
@@ -184,6 +193,7 @@ def runC():
     plt.tight_layout()
 
     plt.show()
+    # plt.savefig("yiaC.svg", format="svg")
 
 
 if __name__ == "__main__":

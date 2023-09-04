@@ -67,6 +67,8 @@ def run():
     rc('text', usetex=False)
 
 
+    plt.rcParams["mathtext.fontset"] = "cm"
+
     cmap = matplotlib.cm.get_cmap('copper')
     conc_colors = [cmap(i) for i in np.linspace(0, 1, 10)]
 
@@ -83,7 +85,8 @@ def run():
             linewidth=5, color=conc_colors[5])
     ax.plot(all_ebs, theory_yields, label='Theory', linewidth=5, color=conc_colors[1])
 
-    ax.set_xlabel(r'$E_b/k_BT$', fontsize=28)
+    # ax.set_xlabel(r'$E_b/k_BT$', fontsize=28)
+    ax.set_xlabel(r"$\epsilon/k_BT$", fontsize=28)
     ax.set_ylabel(r'Yield of Dimers', fontsize=28)
     ax.legend(loc='upper center', fontsize=20, bbox_to_anchor=(0.5, 1.21),
               ncol=2, fancybox=True, shadow=True)
