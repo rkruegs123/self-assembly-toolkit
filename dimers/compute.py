@@ -579,7 +579,8 @@ if __name__ == "__main__":
 
     params.concentration = args.conc
 
-    all_eb = np.linspace(4, 12, 8)
+    # all_eb = np.linspace(4, 12, 8)
+    all_eb = np.arange(0, 13, 1)
     all_yields = list()
 
     start = time.time()
