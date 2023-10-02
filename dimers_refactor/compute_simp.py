@@ -53,19 +53,12 @@ def setup_system_dimers_tr(args):
                                                        jnp.array([1,0,0],dtype=jnp.float64)),
                                  ref_ppos1
                              )
-
     ref_ppos2 = jts.matrix_apply(jts.reflection_matrix(jnp.array([0,0,0],dtype=jnp.float64),
                                                        jnp.array([0,1,0],dtype=jnp.float64)),
                                  ref_ppos2
     )
-
     ref_ppos = jnp.array([ref_ppos1, ref_ppos2])
 
-    Pots = [
-        potentials.RepulsivePotential(),
-        potentials.MorseXPotential(),
-        potentials.MorseXRepulsivePotential()
-    ]
 
     def monomer_energy(q, ppos):
         # assert(q.shape[0] == 6)
@@ -100,35 +93,39 @@ def setup_system_dimers_tr(args):
             for j in range(3):
                 pos2 = real_ppos[1][j]
                 r = jnp.linalg.norm(pos1-pos2)
-                tot_energy += Pots[0].E(r, rmin=0, rmax=sphere_radius*2,
-                                        A=args['rep_A'], alpha=args['rep_alpha'])
+                tot_energy += potentials.repulsive(
+                    r, rmin=0, rmax=sphere_radius*2,
+                    A=args['rep_A'], alpha=args['rep_alpha'])
 
         # Add attraction b/w blue patches
         pos1 = real_ppos[0][3]
         pos2 = real_ppos[1][3]
         r = jnp.linalg.norm(pos1-pos2)
-        tot_energy += Pots[1].E(r, rmin=0, rmax=morse_rcut,
-                                D0=args['morse_d0']*args['morse_d0_b'],
-                                alpha=args['morse_a'], r0=args['morse_r0'],
-                                ron=morse_rcut/2.)
+        tot_energy += potentials.morse_x(
+            r, rmin=0, rmax=morse_rcut,
+            D0=args['morse_d0']*args['morse_d0_b'],
+            alpha=args['morse_a'], r0=args['morse_r0'],
+            ron=morse_rcut/2.)
 
         # Add attraction b/w green patches
         pos1 = real_ppos[0][5]
         pos2 = real_ppos[1][4]
         r = jnp.linalg.norm(pos1-pos2)
-        tot_energy += Pots[1].E(r, rmin=0, rmax=morse_rcut,
-                                D0=args['morse_d0']*args['morse_d0_g'],
-                                alpha=args['morse_a'], r0=args['morse_r0'],
-                                ron=morse_rcut/2.)
+        tot_energy += potentials.morse_x(
+            r, rmin=0, rmax=morse_rcut,
+            D0=args['morse_d0']*args['morse_d0_g'],
+            alpha=args['morse_a'], r0=args['morse_r0'],
+            ron=morse_rcut/2.)
 
         # Add attraction b/w red patches
         pos1 = real_ppos[0][4]
         pos2 = real_ppos[1][5]
         r = jnp.linalg.norm(pos1-pos2)
-        tot_energy += Pots[1].E(r, rmin=0, rmax=morse_rcut,
-                                D0=args['morse_d0']*args['morse_d0_r'],
-                                alpha=args['morse_a'], r0=args['morse_r0'],
-                                ron=morse_rcut/2.)
+        tot_energy += potentials.morse_x(
+            r, rmin=0, rmax=morse_rcut,
+            D0=args['morse_d0']*args['morse_d0_r'],
+            alpha=args['morse_a'], r0=args['morse_r0'],
+            ron=morse_rcut/2.)
 
         # Note: no repulsion between identical patches, as in Agnese's code. May affect simulations.
         return tot_energy
