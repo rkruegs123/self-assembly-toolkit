@@ -15,50 +15,15 @@ from jax.ops import index, index_add, index_update
 
 import potentials
 from jax_transformations3d import jax_transformations3d as jts
+from utils import euler_scheme, convert_to_matrix, ref_ppos, ref_q0
 
 from jax.config import config
 config.update("jax_enable_x64", True)
 
 
-# euler_scheme: string of 4 characters (e.g. 'sxyz') that define euler angles
-euler_scheme = "sxyz"
-
-
-def ConvertToMatrix(mi):
-    """
-    Convert a set x,y,z,alpha,beta,gamma into a jts transformation matrix
-    """
-    T = jts.translation_matrix(mi[:3])
-    R = jts.euler_matrix(mi[3],mi[4],mi[5], axes=euler_scheme)
-    return jnp.matmul(T,R)
-
-def setup_system_dimers_tr(args):
+def get_energy_fns(args):
 
     Nbb = 2
-
-    a = 1 # distance of the center of the spheres from the BB COM
-    b = .3 # distance of the center of the patches from the BB COM
-    ref_ppos1 = np.array([
-        [0.,                  0.,                   a], # first sphere
-        [0.,  a*np.cos(np.pi/6.), -a*np.sin(np.pi/6.)], # second sphere
-        [0., -a*np.cos(np.pi/6.), -a*np.sin(np.pi/6.)], # third sphere
-        [a,                   0.,                   b], # first patch
-        [a,   b*np.cos(np.pi/6.), -b*np.sin(np.pi/6.)], # second patch
-        [a,  -b*np.cos(np.pi/6.), -b*np.sin(np.pi/6.)]  # third patch
-    ])
-
-    ### just for now ###
-    ### these are the positions of the spheres within the building block
-    ref_ppos2 = jts.matrix_apply(jts.reflection_matrix(jnp.array([0,0,0],dtype=jnp.float64),
-                                                       jnp.array([1,0,0],dtype=jnp.float64)),
-                                 ref_ppos1
-                             )
-    ref_ppos2 = jts.matrix_apply(jts.reflection_matrix(jnp.array([0,0,0],dtype=jnp.float64),
-                                                       jnp.array([0,1,0],dtype=jnp.float64)),
-                                 ref_ppos2
-    )
-    ref_ppos = jnp.array([ref_ppos1, ref_ppos2])
-
 
     def monomer_energy(q, ppos):
         # assert(q.shape[0] == 6)
@@ -78,7 +43,7 @@ def setup_system_dimers_tr(args):
         Mat = []
         for i in range(Nbb):
             qi = i*6
-            Mat.append(ConvertToMatrix(q[qi:qi+6]))
+            Mat.append(convert_to_matrix(q[qi:qi+6]))
 
         # apply building block matrix to spheres positions
         real_ppos = []
@@ -130,7 +95,7 @@ def setup_system_dimers_tr(args):
         # Note: no repulsion between identical patches, as in Agnese's code. May affect simulations.
         return tot_energy
 
-    return monomer_energy, cluster_energy, ref_ppos
+    return monomer_energy, cluster_energy
 
 def add_variables(ma, mb):
     """
@@ -141,8 +106,8 @@ def add_variables(ma, mb):
     note: add_variables(ma,mb) != add_variables(mb,ma)
     """
 
-    Ma = ConvertToMatrix(ma)
-    Mb = ConvertToMatrix(mb)
+    Ma = convert_to_matrix(ma)
+    Mb = convert_to_matrix(mb)
     Mab = jnp.matmul(Mb,Ma)
     trans = jnp.array(jts.translation_from_matrix(Mab))
     angles = jnp.array(jts.euler_from_matrix(Mab, euler_scheme))
@@ -155,14 +120,14 @@ def add_variables_all(mas, mbs):
     to add_variables().
     """
 
-    mas_temp = jnp.reshape(mas, (mas.shape[0]//6,6))
-    mbs_temp = jnp.reshape(mbs, (mbs.shape[0]//6,6))
+    mas_temp = jnp.reshape(mas, (mas.shape[0] // 6, 6))
+    mbs_temp = jnp.reshape(mbs, (mbs.shape[0] // 6, 6))
 
     return jnp.reshape(vmap(add_variables, in_axes=(0, 0))(
         mas_temp, mbs_temp), mas.shape)
 
 
-def setup_variable_transformation_old(energy_fn, q0, ppos):
+def setup_variable_transformation(energy_fn, q0, ppos):
     """
     Args:
     energy_fn: function to calculate the energy:
@@ -192,7 +157,7 @@ def setup_variable_transformation_old(energy_fn, q0, ppos):
     print("\nEval", evals)
 
     zeromode_thresh = 1e-8
-    num_zero_modes = jnp.sum(jnp.where(evals<zeromode_thresh, 1, 0))
+    num_zero_modes = jnp.sum(jnp.where(evals < zeromode_thresh, 1, 0))
 
     if Nbb == 1:
         zvib = 1.0
@@ -203,7 +168,6 @@ def setup_variable_transformation_old(energy_fn, q0, ppos):
 
     def ftilde(nu):
         return jnp.matmul(evecs.T[6:].T, nu[6:])
-
 
     def f_multimer(nu, addq0=True):
         # q0+ftilde
@@ -225,7 +189,7 @@ def setup_variable_transformation_old(energy_fn, q0, ppos):
     return jit(f), num_zero_modes, zvib
 
 
-def GetJmean_method1_old(f, key, nrandom=100000):
+def calc_jmean(f, key, nrandom=100000):
     def random_euler_angles(key):
         quat = jts.random_quaternion(None, key)
         return jnp.array(jts.euler_from_quaternion(quat, euler_scheme))
@@ -249,25 +213,21 @@ def GetJmean_method1_old(f, key, nrandom=100000):
     return mean, error
 
 
-def Calculate_Zc_old(key, energy_fn, ref_q0, ref_ppos, sigma, kBT, V):
-    """
-    Calculate Zc except without the lambdas
-    """
+def calculate_zc(key, energy_fn, all_q0, all_ppos, sigma, kBT, V):
 
-    f, num_zero_modes, zvib = setup_variable_transformation_old(energy_fn, ref_q0, ref_ppos)
+    f, num_zero_modes, zvib = setup_variable_transformation(energy_fn, all_q0, all_ppos)
 
-    Js_mean, Js_error = GetJmean_method1_old(f, key)
+    Js_mean, Js_error = calc_jmean(f, key)
     Jtilde = 8.0*(jnp.pi**2) * Js_mean
 
-    E0 = energy_fn(ref_q0, ref_ppos)
+    E0 = energy_fn(all_q0, all_ppos)
     boltzmann_weight = jnp.exp(-E0/kBT)
 
-    print("E0", len(ref_q0), E0)
-    print("zvib", len(ref_q0), zvib)
-    print("Jtilde", len(ref_q0), Jtilde)
+    print("E0", len(all_q0), E0)
+    print("zvib", len(all_q0), zvib)
+    print("Jtilde", len(all_q0), Jtilde)
 
     return boltzmann_weight * V * (Jtilde/sigma) * zvib
-    # return boltzmann_weight * V
 
 
 def Calculate_pc_list(Nb, Nr, Zc_monomer, Zc_dimer, exact=False):
@@ -290,7 +250,7 @@ def Calculate_yield_can(Nb, Nr, pc_list):
     Y_list = jnp.array([Nd / (Nb+Nr-Nd) for Nd in range(len(pc_list))])
     return jnp.dot(Y_list, pc_list)
 
-def Full_Calculation_can(args, seed=0):
+def run(args, seed=0):
     """
     monomer_energy is a function of q=(x,y,z,alpha,beta,gamma) with the parameters "euler_scheme" and "ppos"
     dimer_energy is a function of q=(x,y,z,alpha,beta,gamma) with the parameters "euler_scheme" and "ppos"
@@ -303,7 +263,7 @@ def Full_Calculation_can(args, seed=0):
 
     key = random.PRNGKey(seed)
 
-    monomer_energy, dimer_energy, ref_ppos = setup_system_dimers_tr(args)
+    monomer_energy, dimer_energy = get_energy_fns(args)
 
     Nblue, Nred = args['num_monomer'], args['num_monomer']
 
@@ -311,21 +271,15 @@ def Full_Calculation_can(args, seed=0):
     Ntot = jnp.sum(jnp.array(args['num_monomer']))
     V = Ntot / conc
 
-    separation = 2.
-
-    ref_q0 = jnp.array([-separation/2.0,1e-16,0,0,0,0,separation/2.0,0,0,0,0,0], dtype=jnp.float64)
-
     split1, split2 = random.split(key)
-    Zc_dimer = Calculate_Zc_old(
+    Zc_dimer = calculate_zc(
         split1, dimer_energy, ref_q0, ref_ppos,
         sigma=1, kBT=1.0, V=V)
-    Zc_monomer = Calculate_Zc_old(
+    Zc_monomer = calculate_zc(
         split2, monomer_energy,
         ref_q0[:6], jnp.array([ref_ppos[0]]),
         sigma=1, kBT=1.0, V=V)
 
-
-    # these will need to change for trimers
     pc_list = Calculate_pc_list(Nblue, Nred, Zc_monomer, Zc_dimer, exact=True)
     Y_dimer = Calculate_yield_can(Nblue, Nred, pc_list)
 
@@ -368,21 +322,18 @@ if __name__ == "__main__":
     parser = get_argparse()
     args = vars(parser.parse_args())
 
-
-
-    # all_eb = np.linspace(4, 12, 8)
-    all_eb = np.arange(0, 13, 1)
-    # all_eb = np.arange(0, 13, 2)
+    # all_eb = np.arange(0, 13, 1)
+    all_eb = np.arange(3, 13, 1)
     all_yields = list()
 
     start = time.time()
     for d0 in tqdm(all_eb):
 
         args['morse_d0'] = d0
-        Ys, pc = Full_Calculation_can(args)
-        all_yields.append(Ys)
+        ys, pc = run(args)
+        all_yields.append(ys)
 
-        print(Ys)
+        print(ys)
         print(pc)
     end = time.time()
 
