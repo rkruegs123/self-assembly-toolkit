@@ -24,27 +24,6 @@ config.update("jax_enable_x64", True)
 euler_scheme = "sxyz"
 
 
-
-class CParams_dimer:
-    # these are all class variables, they do not change in
-    # different instances of the class CParams
-    N = [9, 9]
-    concentration = 0.001
-
-    rep_A = 500.0
-    rep_alpha = 2.5
-
-    morse_D0 = 10.
-    morse_D0_r = 1. # 1.0
-    morse_D0_g = 1. # 1.5
-    morse_D0_b = 1. # 2.0
-
-    morse_a = 5.0
-
-    morse_r0 = 0.
-
-
-
 def ConvertToMatrix(mi):
     """
     Convert a set x,y,z,alpha,beta,gamma into a jts transformation matrix
@@ -53,7 +32,7 @@ def ConvertToMatrix(mi):
     R = jts.euler_matrix(mi[3],mi[4],mi[5], axes=euler_scheme)
     return jnp.matmul(T,R)
 
-def setup_system_dimers_tr(params):
+def setup_system_dimers_tr(args):
 
     Nbb = 2
 
@@ -99,7 +78,7 @@ def setup_system_dimers_tr(params):
     # BBt[0].typeids: array([0, 0, 0, 1, 5, 3])
     # BBt[1].typeids: array([0, 0, 0, 2, 4, 6])
 
-    morse_rcut = 8. / params.morse_a + params.morse_r0
+    morse_rcut = 8. / args['morse_a'] + args['morse_r0']
     def cluster_energy(q, ppos):
         # convert the building block coordinates to a tranformation
         # matrix
@@ -122,15 +101,15 @@ def setup_system_dimers_tr(params):
                 pos2 = real_ppos[1][j]
                 r = jnp.linalg.norm(pos1-pos2)
                 tot_energy += Pots[0].E(r, rmin=0, rmax=sphere_radius*2,
-                                        A=params.rep_A, alpha=params.rep_alpha)
+                                        A=args['rep_A'], alpha=args['rep_alpha'])
 
         # Add attraction b/w blue patches
         pos1 = real_ppos[0][3]
         pos2 = real_ppos[1][3]
         r = jnp.linalg.norm(pos1-pos2)
         tot_energy += Pots[1].E(r, rmin=0, rmax=morse_rcut,
-                                D0=params.morse_D0*params.morse_D0_b,
-                                alpha=params.morse_a, r0=params.morse_r0,
+                                D0=args['morse_d0']*args['morse_d0_b'],
+                                alpha=args['morse_a'], r0=args['morse_r0'],
                                 ron=morse_rcut/2.)
 
         # Add attraction b/w green patches
@@ -138,8 +117,8 @@ def setup_system_dimers_tr(params):
         pos2 = real_ppos[1][4]
         r = jnp.linalg.norm(pos1-pos2)
         tot_energy += Pots[1].E(r, rmin=0, rmax=morse_rcut,
-                                D0=params.morse_D0*params.morse_D0_g,
-                                alpha=params.morse_a, r0=params.morse_r0,
+                                D0=args['morse_d0']*args['morse_d0_g'],
+                                alpha=args['morse_a'], r0=args['morse_r0'],
                                 ron=morse_rcut/2.)
 
         # Add attraction b/w red patches
@@ -147,8 +126,8 @@ def setup_system_dimers_tr(params):
         pos2 = real_ppos[1][5]
         r = jnp.linalg.norm(pos1-pos2)
         tot_energy += Pots[1].E(r, rmin=0, rmax=morse_rcut,
-                                D0=params.morse_D0*params.morse_D0_r,
-                                alpha=params.morse_a, r0=params.morse_r0,
+                                D0=args['morse_d0']*args['morse_d0_r'],
+                                alpha=args['morse_a'], r0=args['morse_r0'],
                                 ron=morse_rcut/2.)
 
         # Note: no repulsion between identical patches, as in Agnese's code. May affect simulations.
@@ -171,7 +150,7 @@ def add_variables(ma, mb):
     trans = jnp.array(jts.translation_from_matrix(Mab))
     angles = jnp.array(jts.euler_from_matrix(Mab, euler_scheme))
 
-    return jnp.concatenate((trans,angles))
+    return jnp.concatenate((trans, angles))
 
 def add_variables_all(mas, mbs):
     """
@@ -314,7 +293,7 @@ def Calculate_yield_can(Nb, Nr, pc_list):
     Y_list = jnp.array([Nd / (Nb+Nr-Nd) for Nd in range(len(pc_list))])
     return jnp.dot(Y_list, pc_list)
 
-def Full_Calculation_can(params, seed=0):
+def Full_Calculation_can(args, seed=0):
     """
     monomer_energy is a function of q=(x,y,z,alpha,beta,gamma) with the parameters "euler_scheme" and "ppos"
     dimer_energy is a function of q=(x,y,z,alpha,beta,gamma) with the parameters "euler_scheme" and "ppos"
@@ -327,12 +306,12 @@ def Full_Calculation_can(params, seed=0):
 
     key = random.PRNGKey(seed)
 
-    monomer_energy, dimer_energy, ref_ppos = setup_system_dimers_tr(params)
+    monomer_energy, dimer_energy, ref_ppos = setup_system_dimers_tr(args)
 
-    [Nblue, Nred] = params.N
+    Nblue, Nred = args['num_monomer'], args['num_monomer']
 
-    conc = params.concentration
-    Ntot = jnp.sum(jnp.array(params.N))
+    conc = args['conc']
+    Ntot = jnp.sum(jnp.array(args['num_monomer']))
     V = Ntot / conc
 
     separation = 2.
@@ -364,7 +343,25 @@ def get_argparse():
                         help='Number of each kind of monomer')
 
     # Repulsive interaction
-    parser.add_argument('--rep-a', type=float,  default=500.0, help='A parameter for repulsive interaction')
+    parser.add_argument('--rep-A', type=float,  default=500.0,
+                        help='A parameter for repulsive interaction')
+    parser.add_argument('--rep-alpha', type=float,  default=2.5,
+                        help='alpha parameter for repulsive interaction')
+
+    # Morse interaction
+    parser.add_argument('--morse-d0', type=float,  default=10.0,
+                        help='d0 parameter for Morse interaction')
+    parser.add_argument('--morse-d0-r', type=float,  default=1.0,
+                        help='Scalar for d0 for red patches')
+    parser.add_argument('--morse-d0-g', type=float,  default=1.0,
+                        help='Scalar for d0 for green patches')
+    parser.add_argument('--morse-d0-b', type=float,  default=1.0,
+                        help='Scalar for d0 for blue patches')
+
+    parser.add_argument('--morse-a', type=float,  default=5.0,
+                        help='alpha parameter for Morse interaction')
+    parser.add_argument('--morse-r0', type=float,  default=0.0,
+                        help='r0 parameter for Morse interaction')
 
     return parser
 
@@ -375,7 +372,6 @@ if __name__ == "__main__":
     args = vars(parser.parse_args())
 
 
-    params = CParams_dimer()
 
     # all_eb = np.linspace(4, 12, 8)
     all_eb = np.arange(0, 13, 1)
@@ -384,9 +380,9 @@ if __name__ == "__main__":
 
     start = time.time()
     for d0 in tqdm(all_eb):
-        params.morse_D0 = d0
 
-        Ys, pc = Full_Calculation_can(params)
+        args['morse_d0'] = d0
+        Ys, pc = Full_Calculation_can(args)
         all_yields.append(Ys)
 
         print(Ys)
