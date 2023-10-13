@@ -1,7 +1,7 @@
 import pdb
 from tqdm import tqdm
 import argparse
-import numpy as np
+import numpy as onp
 import scipy as osp
 import csv
 import matplotlib.pyplot as plt
@@ -187,6 +187,16 @@ def setup_variable_transformation(energy_fn, q0, ppos):
 
     return jit(f), num_zero_modes, zvib
 
+def standard_error(data):
+    mean = jnp.mean(data, axis=0)
+    
+    # Calculate the standard error using the formula: std(data) / sqrt(N)
+    std_dev = jnp.std(data, axis=0)
+    sqrt_n = jnp.sqrt(data.shape[0])
+    std_error = std_dev / sqrt_n
+    
+    return std_error
+
 
 def calc_jmean(f, key, nrandom=100000):
     def random_euler_angles(key):
@@ -205,10 +215,11 @@ def calc_jmean(f, key, nrandom=100000):
 
     nu_fn = jit(lambda nu: jnp.abs(jnp.linalg.det(jacfwd(f)(nu, False))))
     Js = vmap(nu_fn)(nus)
-
+    #pdb.set_trace()
     mean = jnp.mean(Js)
-    error = osp.stats.sem(Js)
-    #error = 0
+    #error = osp.stats.sem(Js)
+    #error = osp.stats.sem(Js)
+    error = standard_error(Js)
 
     return mean ,error
 
@@ -321,7 +332,7 @@ if __name__ == "__main__":
     parser = get_argparse()
     args = vars(parser.parse_args())
 
-    d0= .1
+    d0= .4
     target_yield = .4
    # key = random.PRNGKey(6)
     #key, subkey = random.split(key,2)
@@ -339,8 +350,9 @@ if __name__ == "__main__":
         return (yi-target_yield)**2
 
     grad_yield=  jacfwd(loss_fuc) 
-
-    print(grad_yield(d0, args, target_yield, seed = 9))
+    
+ 
+    print("This is gradient of Yield:", grad_yield(d0, args, target_yield, seed = 9))
 
 
 
@@ -348,8 +360,8 @@ if __name__ == "__main__":
 
 
     """
-    # all_eb = np.arange(0, 13, 1)
-    all_eb = np.arange(3, 13, 1)
+    # all_eb = onp.arange(0, 13, 1)
+    all_eb = onp.arange(3, 13, 1)
     all_yields = list()
 
     start = time.time()

@@ -822,6 +822,7 @@ def random_quaternion( rand=None, key=None):
   If both rand and key are None, fall back to onp.random
 
   """
+  """
   if(rand is None and key is None):
     rnd = jnp.array(onp.random.rand(3), dtype=jnp.float64)
 
@@ -832,6 +833,14 @@ def random_quaternion( rand=None, key=None):
     rnd = jnp.array(rand, dtype=jnp.float64)
     assert(rnd.shape == (3,))
     #assert len(rnd) == 3
+  """
+  if rand is None:
+        if key is None:
+            key = jax.random.PRNGKey(0)
+        rnd = random.uniform(key, (3,), minval=0.0, maxval=1.0, dtype=jnp.float64)
+  else:
+        rnd = jnp.array(rand, dtype=jnp.float64)
+        assert rnd.shape == (3,)
 
   r1 = jnp.sqrt(1.0 - rnd[0])
   r2 = jnp.sqrt(rnd[0])
