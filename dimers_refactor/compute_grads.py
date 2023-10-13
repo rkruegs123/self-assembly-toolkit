@@ -215,6 +215,7 @@ def calc_jmean(f, key, nrandom=100000):
 
 def calculate_zc(key, energy_fn, all_q0, all_ppos, sigma, kBT, V):
 
+    """
     f, num_zero_modes, zvib = setup_variable_transformation(energy_fn, all_q0, all_ppos)
 
     Js_mean, Js_error = calc_jmean(f, key)
@@ -228,6 +229,14 @@ def calculate_zc(key, energy_fn, all_q0, all_ppos, sigma, kBT, V):
     print("Jtilde", len(all_q0), Jtilde)
 
     return boltzmann_weight * V * (Jtilde/sigma) * zvib
+    """
+
+    f, num_zero_modes, zvib = setup_variable_transformation(energy_fn, all_q0, all_ppos)
+
+    E0 = energy_fn(all_q0, all_ppos)
+    boltzmann_weight = jnp.exp(-E0/kBT)
+
+    return boltzmann_weight * V * zvib
 
 
 def Calculate_pc_list(Nb, Nr, Zc_monomer, Zc_dimer, exact=False):
@@ -272,9 +281,11 @@ def run(args, seed=0):
     V = Ntot / conc
 
     split1, split2 = random.split(key)
+
     Zc_dimer = calculate_zc(
         split1, dimer_energy, ref_q0, ref_ppos,
         sigma=1, kBT=1.0, V=V)
+
     Zc_monomer = calculate_zc(
         split2, monomer_energy,
         ref_q0[:6], jnp.array([ref_ppos[0]]),
@@ -283,7 +294,8 @@ def run(args, seed=0):
     pc_list = Calculate_pc_list(Nblue, Nred, Zc_monomer, Zc_dimer, exact=True)
     Y_dimer = Calculate_yield_can(Nblue, Nred, pc_list)
 
-    return Y_dimer, pc_list
+    # return Zc_dimer
+    return Y_dimer
 
 def get_argparse():
     parser = argparse.ArgumentParser(description='Compute the yield of a simple dimer system')
@@ -320,7 +332,7 @@ def get_argparse():
 target_yield = 0.5
 def loss_fn(d0, args):
     args['morse_d0'] = d0
-    ys, pc = run(args)
+    ys = run(args)
     return (target_yield - ys)**2
 grad_fn = jacfwd(loss_fn)
 
@@ -335,32 +347,6 @@ if __name__ == "__main__":
 
     my_grad = grad_fn(4.0, args)
 
-
-    # all_eb = np.arange(0, 13, 1)
-
-    all_eb = np.arange(3, 13, 1)
-    all_yields = list()
-
-    start = time.time()
-    for d0 in tqdm(all_eb):
-
-        args['morse_d0'] = d0
-        ys, pc = run(args)
-        all_yields.append(ys)
-
-        print(ys)
-        print(pc)
-    end = time.time()
-
-    print(f"Total execution: {end - start} seconds")
-
-    plt.plot(all_eb, all_yields)
-    plt.ylabel("Dimers Yield")
-    plt.xlabel(r"$E_b$")
-    plt.show()
-
     pdb.set_trace()
-
-
 
     print("done")

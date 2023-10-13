@@ -570,7 +570,6 @@ if __name__ == "__main__":
     import matplotlib.pyplot as plt
     import time
 
-
     params = CParams_dimer()
     parser = parserFunc()
     args = parser.parse_args()

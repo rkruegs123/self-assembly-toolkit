@@ -19,6 +19,7 @@ def convert_to_matrix(mi):
 
 a = 1 # distance of the center of the spheres from the BB COM
 b = .3 # distance of the center of the patches from the BB COM
+"""
 ref_ppos1 = onp.array([
     [0., 0., a], # first sphere
     [0., a*onp.cos(onp.pi/6.), -a*onp.sin(onp.pi/6.)], # second sphere
@@ -26,6 +27,15 @@ ref_ppos1 = onp.array([
     [a, 0., b], # first patch
     [a, b*onp.cos(onp.pi/6.), -b*onp.sin(onp.pi/6.)], # second patch
     [a, -b*onp.cos(onp.pi/6.), -b*onp.sin(onp.pi/6.)]  # third patch
+])
+"""
+ref_ppos1 = jnp.array([
+    [0., 0., a], # first sphere
+    [0., a*jnp.cos(jnp.pi/6.), -a*jnp.sin(jnp.pi/6.)], # second sphere
+    [0., -a*jnp.cos(jnp.pi/6.), -a*jnp.sin(jnp.pi/6.)], # third sphere
+    [a, 0., b], # first patch
+    [a, b*jnp.cos(jnp.pi/6.), -b*jnp.sin(jnp.pi/6.)], # second patch
+    [a, -b*jnp.cos(jnp.pi/6.), -b*jnp.sin(jnp.pi/6.)]  # third patch
 ])
 
 # these are the positions of the spheres within the building block
