@@ -11,6 +11,7 @@ from random import randint
 from jax import random
 from jax import jit, grad, vmap, value_and_grad, hessian, jacfwd, jacrev
 import jax.numpy as jnp
+import optax
 
 import potentials
 from jax_transformations3d import jax_transformations3d as jts
@@ -189,12 +190,12 @@ def setup_variable_transformation(energy_fn, q0, ppos):
 
 def standard_error(data):
     mean = jnp.mean(data, axis=0)
-    
+
     # Calculate the standard error using the formula: std(data) / sqrt(N)
     std_dev = jnp.std(data, axis=0)
     sqrt_n = jnp.sqrt(data.shape[0])
     std_error = std_dev / sqrt_n
-    
+
     return std_error
 
 
@@ -332,12 +333,8 @@ if __name__ == "__main__":
     parser = get_argparse()
     args = vars(parser.parse_args())
 
-    d0= .4
-    target_yield = .4
-   # key = random.PRNGKey(6)
-    #key, subkey = random.split(key,2)
-#    seed = random.normal(key, shape=(1,))
- #   seed = float(random.normal(key))
+    d0 = 9.0914936162695
+    target_yield = 0.4
 
     def yield_fuc(d0, args, seed):
         args['morse_d0'] = d0
@@ -345,47 +342,41 @@ if __name__ == "__main__":
         return yi
 
 
-    def loss_fuc(d0, args, target_yield, seed):
-        yi= yield_fuc(d0, args, seed)
-        return (yi-target_yield)**2
-
-    grad_yield=  jacfwd(loss_fuc) 
-    
- 
-    print("This is gradient of Yield:", grad_yield(d0, args, target_yield, seed = 9))
+    def loss_fuc(params, args, target_yield, seed):
+        d0 = params['d0']
+        yi = yield_fuc(d0, args, seed)
+        return (yi-target_yield)**2, yi
+    grad_yield = jacfwd(loss_fuc, has_aux=True)
 
 
+    num_iters = 100
+    learning_rate = 0.1
+    optimizer = optax.adam(learning_rate)
+    params = {'d0': d0}
+    opt_state = optimizer.init(params)
 
+    yield_path = "yield.txt"
+    grad_path = "grad.txt"
+    d0_path = "d0.txt"
 
+    for i in tqdm(range(num_iters)):
+        print(f"Iteration {i}:")
 
+        grads, curr_yield = grad_yield(params, args, target_yield, seed=9)
+        print(f"\t- grad: {grads}:")
+        print(f"\t- current yield: {curr_yield}:")
 
-    """
-    # all_eb = onp.arange(0, 13, 1)
-    all_eb = onp.arange(3, 13, 1)
-    all_yields = list()
+        with open(yield_path, "a") as f:
+            f.write(f"{curr_yield}\n")
+        with open(grad_path, "a") as f:
+            f.write(f"{grads}\n")
+        with open(d0_path, "a") as f:
+            curr_d0 = params['d0']
+            f.write(f"{curr_d0}\n")
 
-    start = time.time()
-    for d0 in tqdm(all_eb):
+        updates, opt_state = optimizer.update(grads, opt_state)
+        params = optax.apply_updates(params, updates)
 
-        args['morse_d0'] = d0
-        ys, pc = run(args)
-        all_yields.append(ys)
-
-        print(ys)
-        print(pc)
-    end = time.time()
-
-    print(f"Total execution: {end - start} seconds")
-
-    plt.plot(all_eb, all_yields)
-    plt.ylabel("Dimers Yield")
-    plt.xlabel(r"$E_b$")
-    plt.show()
-    plt.savefig("yield_plot.pdf")
-    """
     pdb.set_trace()
 
-
-
     print("done")
-
