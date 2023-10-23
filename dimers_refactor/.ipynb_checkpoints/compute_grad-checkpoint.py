@@ -7,14 +7,12 @@ import csv
 import matplotlib.pyplot as plt
 import time
 from random import randint
-from jax import lax
 
 from jax import random
 from jax import jit, grad, vmap, value_and_grad, hessian, jacfwd, jacrev
 import jax.numpy as jnp
-import optax
 
-import potentials 
+import potentials
 from jax_transformations3d import jax_transformations3d as jts
 from utils import euler_scheme, convert_to_matrix, ref_ppos, ref_q0
 
@@ -155,7 +153,7 @@ def setup_variable_transformation(energy_fn, q0, ppos):
 
     evals, evecs = jnp.linalg.eigh(H)
 
-    #print("\nEval", evals)
+    print("\nEval", evals)
 
     zeromode_thresh = 1e-8
     num_zero_modes = jnp.sum(jnp.where(evals < zeromode_thresh, 1, 0))
@@ -165,7 +163,7 @@ def setup_variable_transformation(energy_fn, q0, ppos):
     else:
         zvib = jnp.prod(jnp.sqrt(2.*jnp.pi/(jnp.abs(evals[6:])+1e-12)))
 
-    #print("Zvib", zvib)
+    print("Zvib", zvib)
 
     def ftilde(nu):
         return jnp.matmul(evecs.T[6:].T, nu[6:])
@@ -191,12 +189,12 @@ def setup_variable_transformation(energy_fn, q0, ppos):
 
 def standard_error(data):
     mean = jnp.mean(data, axis=0)
-
+    
     # Calculate the standard error using the formula: std(data) / sqrt(N)
     std_dev = jnp.std(data, axis=0)
     sqrt_n = jnp.sqrt(data.shape[0])
     std_error = std_dev / sqrt_n
-
+    
     return std_error
 
 
@@ -236,12 +234,12 @@ def calculate_zc(key, energy_fn, all_q0, all_ppos, sigma, kBT, V):
     E0 = energy_fn(all_q0, all_ppos)
     boltzmann_weight = jnp.exp(-E0/kBT)
 
-    #print("E0", len(all_q0), E0)
-    #print("zvib", len(all_q0), zvib)
-    #print("Jtilde", len(all_q0), Jtilde)
+    print("E0", len(all_q0), E0)
+    print("zvib", len(all_q0), zvib)
+    print("Jtilde", len(all_q0), Jtilde)
 
     return boltzmann_weight * V * (Jtilde/sigma) * zvib
-    #return boltzmann_weight * V * (Jtilde/sigma) 
+
 
 def Calculate_pc_list(Nb, Nr, Zc_monomer, Zc_dimer, exact=False):
     Nd_max = min(Nb, Nr)
@@ -258,29 +256,6 @@ def Calculate_pc_list(Nb, Nr, Zc_monomer, Zc_dimer, exact=False):
 
     return pc_list
 
-    """
-
-def Calculate_pc_list(Nb, Nr, Zc_monomer, Zc_dimer, exact=False):
-    Nd_max = jnp.minimum(Nb, Nr)
-    def Mc(Nd):
-        return jax.scipy.special.comb(Nb, Nd, exact=exact) \
-            * jax.scipy.special.comb(Nr, Nd, exact=exact) \
-            * jax.scipy.special.factorial(Nd, exact=exact)
-
-    def Pc(Nd):
-        return Mc(Nd) * (Zc_dimer**Nd) * (Zc_monomer**(Nb-Nd)) * (Zc_monomer**(Nr-Nd))
-
-    # Create the range outside of vmap
-    Nd_range = jnp.arange(0, Nd_max + 1, dtype=jnp.int64)  # Specify dtype
-
-    # Compute pc_list using JAX transformations
-    pc_list = vmap(Pc)(Nd_range)
-
-    pc_list = pc_list / jnp.sum(pc_list)
-
-    return pc_list
-    
-    """
 
 def Calculate_yield_can(Nb, Nr, pc_list):
     Y_list = jnp.array([Nd / (Nb+Nr-Nd) for Nd in range(len(pc_list))])
@@ -300,8 +275,6 @@ def run(args, seed=0):
     key = random.PRNGKey(seed)
 
     monomer_energy, dimer_energy = get_energy_fns(args)
-    
-    #print( monomer_energy, dimer_energy)
 
     Nblue, Nred = args['num_monomer'], args['num_monomer']
 
@@ -359,8 +332,12 @@ if __name__ == "__main__":
     parser = get_argparse()
     args = vars(parser.parse_args())
 
-    d0 = 8.3
-    target_yield = 0.4
+    d0= .4
+    target_yield = .4
+   # key = random.PRNGKey(6)
+    #key, subkey = random.split(key,2)
+#    seed = random.normal(key, shape=(1,))
+ #   seed = float(random.normal(key))
 
     def yield_fuc(d0, args, seed):
         args['morse_d0'] = d0
@@ -368,45 +345,47 @@ if __name__ == "__main__":
         return yi
 
 
-    def loss_fuc(params, args, target_yield, seed):
-        d0 = params['d0']
-        yi = yield_fuc(d0, args, seed)
-        return (yi-target_yield)**2, yi
-    #grad_yield = jit(jacrev(loss_fuc, has_aux=True))
-    grad_yield = jacfwd(loss_fuc)
+    def loss_fuc(d0, args, target_yield, seed):
+        yi= yield_fuc(d0, args, seed)
+        return (yi-target_yield)**2
+
+    grad_yield=  jacfwd(loss_fuc) 
+    
+ 
+    print("This is gradient of Yield:", grad_yield(d0, args, target_yield, seed = 9))
 
 
-    num_iters = 100
-    learning_rate = 0.1
-    optimizer = optax.adam(learning_rate)
-    params = {'d0': d0}
-    opt_state = optimizer.init(params)
 
-    yield_path = "yield_smooth.txt"
-    grad_path = "grad_smooth.txt"
-    d0_path = "d0_smooth.txt"
 
-    for i in tqdm(range(num_iters)):
-        print(f"Iteration {i}:")
 
-        grads, curr_yield = grad_yield(params, args, target_yield, seed=9)
-        #grads = grads['d0']
-        #grads_numeric = grads.item()
-        print(f"\t- grad: {grads}:")
-        print(f"\t- current yield: {curr_yield}:")
 
-        with open(yield_path, "a") as f:
-            f.write(f"{curr_yield}\n")
-        with open(grad_path, "a") as f:
-            f.write(f"{grads}\n")
-        with open(d0_path, "a") as f:
-            curr_d0 = params['d0']
-            f.write(f"{curr_d0}\n")
+    """
+    # all_eb = onp.arange(0, 13, 1)
+    all_eb = onp.arange(3, 13, 1)
+    all_yields = list()
 
-        updates, opt_state = optimizer.update(grads, opt_state)
-        params = optax.apply_updates(params, updates)
-        #params['d0'] = max(7.8, min(params['d0'], 8.4))  ##what I added
+    start = time.time()
+    for d0 in tqdm(all_eb):
 
+        args['morse_d0'] = d0
+        ys, pc = run(args)
+        all_yields.append(ys)
+
+        print(ys)
+        print(pc)
+    end = time.time()
+
+    print(f"Total execution: {end - start} seconds")
+
+    plt.plot(all_eb, all_yields)
+    plt.ylabel("Dimers Yield")
+    plt.xlabel(r"$E_b$")
+    plt.show()
+    plt.savefig("yield_plot.pdf")
+    """
     pdb.set_trace()
 
+
+
     print("done")
+
