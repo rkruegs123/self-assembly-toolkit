@@ -14,7 +14,7 @@ from jax import jit, grad, vmap, value_and_grad, hessian, jacfwd, jacrev
 import jax.numpy as jnp
 import optax
 
-import potentials 
+import potentials
 from jax_transformations3d import jax_transformations3d as jts
 from utils import euler_scheme, convert_to_matrix, ref_ppos, ref_q0
 
@@ -236,13 +236,32 @@ def calculate_zc(key, energy_fn, all_q0, all_ppos, sigma, kBT, V):
     E0 = energy_fn(all_q0, all_ppos)
     boltzmann_weight = jnp.exp(-E0/kBT)
 
-    #print("E0", len(all_q0), E0)
-    #print("zvib", len(all_q0), zvib)
-    #print("Jtilde", len(all_q0), Jtilde)
+    # print("E0", len(all_q0), E0)
+    # print("zvib", len(all_q0), zvib)
+    # print("Jtilde", len(all_q0), Jtilde)
 
     return boltzmann_weight * V * (Jtilde/sigma) * zvib
-    #return boltzmann_weight * V * (Jtilde/sigma) 
+    # return boltzmann_weight * V * (Jtilde/sigma)
 
+
+
+def Calculate_pc_list(N_mon, Zc_monomer, Zc_dimer, exact=False):
+    def Mc(Nd):
+        return osp.special.comb(Nb, Nd, exact=exact) \
+            * osp.special.comb(Nr, Nd, exact=exact) \
+            * osp.special.factorial(Nd, exact=exact)
+
+    def Pc(Nd):
+        return Mc(Nd) * (Zc_dimer**Nd) * (Zc_monomer**(Nb-Nd)) * (Zc_monomer**(Nr-Nd))
+
+    pc_list = jnp.array([Pc(Nd) for Nd in range(0, N_mon+1)])
+    pc_list = pc_list / jnp.sum(pc_list)
+
+    return pc_list
+
+
+# NOTE: the following code relaxes the assumption that Nb == Nr, but is not immediately jit-able. We could fix this if we want, but we don't care for now
+"""
 def Calculate_pc_list(Nb, Nr, Zc_monomer, Zc_dimer, exact=False):
     Nd_max = min(Nb, Nr)
     def Mc(Nd):
@@ -257,30 +276,8 @@ def Calculate_pc_list(Nb, Nr, Zc_monomer, Zc_dimer, exact=False):
     pc_list = pc_list / jnp.sum(pc_list)
 
     return pc_list
+"""
 
-    """
-
-def Calculate_pc_list(Nb, Nr, Zc_monomer, Zc_dimer, exact=False):
-    Nd_max = jnp.minimum(Nb, Nr)
-    def Mc(Nd):
-        return jax.scipy.special.comb(Nb, Nd, exact=exact) \
-            * jax.scipy.special.comb(Nr, Nd, exact=exact) \
-            * jax.scipy.special.factorial(Nd, exact=exact)
-
-    def Pc(Nd):
-        return Mc(Nd) * (Zc_dimer**Nd) * (Zc_monomer**(Nb-Nd)) * (Zc_monomer**(Nr-Nd))
-
-    # Create the range outside of vmap
-    Nd_range = jnp.arange(0, Nd_max + 1, dtype=jnp.int64)  # Specify dtype
-
-    # Compute pc_list using JAX transformations
-    pc_list = vmap(Pc)(Nd_range)
-
-    pc_list = pc_list / jnp.sum(pc_list)
-
-    return pc_list
-    
-    """
 
 def Calculate_yield_can(Nb, Nr, pc_list):
     Y_list = jnp.array([Nd / (Nb+Nr-Nd) for Nd in range(len(pc_list))])
@@ -300,8 +297,8 @@ def run(args, seed=0):
     key = random.PRNGKey(seed)
 
     monomer_energy, dimer_energy = get_energy_fns(args)
-    
-    #print( monomer_energy, dimer_energy)
+
+    # print( monomer_energy, dimer_energy)
 
     Nblue, Nred = args['num_monomer'], args['num_monomer']
 
@@ -318,7 +315,8 @@ def run(args, seed=0):
         ref_q0[:6], jnp.array([ref_ppos[0]]),
         sigma=1, kBT=1.0, V=V)
 
-    pc_list = Calculate_pc_list(Nblue, Nred, Zc_monomer, Zc_dimer, exact=True)
+    # pc_list = Calculate_pc_list(Nblue, Nred, Zc_monomer, Zc_dimer, exact=True)
+    pc_list = Calculate_pc_list(args['num_monomer'], Zc_monomer, Zc_dimer, exact=True)
     Y_dimer = Calculate_yield_can(Nblue, Nred, pc_list)
 
     return Y_dimer, pc_list
@@ -372,8 +370,8 @@ if __name__ == "__main__":
         d0 = params['d0']
         yi = yield_fuc(d0, args, seed)
         return (yi-target_yield)**2, yi
-    #grad_yield = jit(jacrev(loss_fuc, has_aux=True))
-    grad_yield = jacfwd(loss_fuc)
+    grad_yield = jit(jacrev(loss_fuc, has_aux=True))
+    # grad_yield = jacfwd(loss_fuc)
 
 
     num_iters = 100
@@ -390,8 +388,8 @@ if __name__ == "__main__":
         print(f"Iteration {i}:")
 
         grads, curr_yield = grad_yield(params, args, target_yield, seed=9)
-        #grads = grads['d0']
-        #grads_numeric = grads.item()
+        # grads = grads['d0']
+        # grads_numeric = grads.item()
         print(f"\t- grad: {grads}:")
         print(f"\t- current yield: {curr_yield}:")
 
@@ -405,7 +403,7 @@ if __name__ == "__main__":
 
         updates, opt_state = optimizer.update(grads, opt_state)
         params = optax.apply_updates(params, updates)
-        #params['d0'] = max(7.8, min(params['d0'], 8.4))  ##what I added
+        # params['d0'] = max(7.8, min(params['d0'], 8.4))  ##what I added
 
     pdb.set_trace()
 
