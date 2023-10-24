@@ -39,14 +39,21 @@ def get_energy_fns(args):
 
     morse_rcut = 8. / args['morse_a'] + args['morse_r0']
     def cluster_energy(q, ppos):
-        # convert the building block coordinates to a tranformation
-        # matrix
+        # convert the building block coordinates to a tranformation matrix
+
+        # get_trans_matrix_elt = lambda i: convert_to_matrix(q[i*6:i*6+6])
+        # Mat = vmap(get_trans_matrix_elt)(jnp.arange(Nbb))
+
         Mat = []
         for i in range(Nbb):
             qi = i*6
             Mat.append(convert_to_matrix(q[qi:qi+6]))
 
         # apply building block matrix to spheres positions
+
+        # get_transf_pos = lambda i: jts.matrix_apply(Mat[i], ppos[i])
+        # real_ppos = vmap(get_transf_pos)(jnp.arange(Nbb))
+        
         real_ppos = []
         for i in range(Nbb):
             real_ppos.append(jts.matrix_apply(Mat[i], ppos[i]))
@@ -54,6 +61,22 @@ def get_energy_fns(args):
         tot_energy = jnp.float64(0)
 
         # Add repulsive interaction between spheres
+        def j_repulsive_fn(j, pos1):
+            pos2 = real_ppos[1][j]
+            r = jnp.linalg.norm(pos1-pos2)
+            return potentials.repulsive(
+                r, rmin=0, rmax=sphere_radius*2,
+                A=args['rep_A'], alpha=args['rep_alpha'])
+
+        def i_repulsive_fn(i):
+            pos1 = real_ppos[0][i]
+            all_j_terms = vmap(j_repulsive_fn, (0, None))(jnp.arange(3), pos1)
+            return jnp.sum(all_j_terms)
+
+        repulsive_sm = jnp.sum(vmap(i_repulsive_fn)(jnp.arange(3)))
+        tot_energy += repulsive_sm
+
+        """
         for i in range(3):
             pos1 = real_ppos[0][i]
             for j in range(3):
@@ -62,6 +85,8 @@ def get_energy_fns(args):
                 tot_energy += potentials.repulsive(
                     r, rmin=0, rmax=sphere_radius*2,
                     A=args['rep_A'], alpha=args['rep_alpha'])
+        """
+        
 
         # Add attraction b/w blue patches
         pos1 = real_ppos[0][3]
@@ -144,10 +169,10 @@ def setup_variable_transformation(energy_fn, q0, ppos):
     """
 
     Nbb = q0.shape[0] // 6 # Number of building blocks
-    assert(Nbb*6 == q0.shape[0])
-    assert(len(ppos.shape) == 3)
-    assert(ppos.shape[0] == Nbb)
-    assert(ppos.shape[2] == 3)
+    # assert(Nbb*6 == q0.shape[0])
+    # assert(len(ppos.shape) == 3)
+    # assert(ppos.shape[0] == Nbb)
+    # assert(ppos.shape[2] == 3)
 
     E = energy_fn(q0, ppos)
     G = grad(energy_fn)(q0, ppos)
@@ -155,7 +180,7 @@ def setup_variable_transformation(energy_fn, q0, ppos):
 
     evals, evecs = jnp.linalg.eigh(H)
 
-    #print("\nEval", evals)
+    # print("\nEval", evals)
 
     zeromode_thresh = 1e-8
     num_zero_modes = jnp.sum(jnp.where(evals < zeromode_thresh, 1, 0))
@@ -165,7 +190,7 @@ def setup_variable_transformation(energy_fn, q0, ppos):
     else:
         zvib = jnp.prod(jnp.sqrt(2.*jnp.pi/(jnp.abs(evals[6:])+1e-12)))
 
-    #print("Zvib", zvib)
+    # print("Zvib", zvib)
 
     def ftilde(nu):
         return jnp.matmul(evecs.T[6:].T, nu[6:])
@@ -217,10 +242,10 @@ def calc_jmean(f, key, nrandom=100000):
 
     nu_fn = jit(lambda nu: jnp.abs(jnp.linalg.det(jacfwd(f)(nu, False))))
     Js = vmap(nu_fn)(nus)
-    #pdb.set_trace()
+    # pdb.set_trace()
     mean = jnp.mean(Js)
-    #error = osp.stats.sem(Js)
-    #error = osp.stats.sem(Js)
+    # error = osp.stats.sem(Js)
+    # error = osp.stats.sem(Js)
     error = standard_error(Js)
 
     return mean ,error
@@ -315,11 +340,15 @@ def run(args, seed=0):
         ref_q0[:6], jnp.array([ref_ppos[0]]),
         sigma=1, kBT=1.0, V=V)
 
-    # pc_list = Calculate_pc_list(Nblue, Nred, Zc_monomer, Zc_dimer, exact=True)
+
+    # Note: this one works
+    # return Zc_dimer, None
+
+    # Note: this one doesn't work
     pc_list = Calculate_pc_list(args['num_monomer'], Zc_monomer, Zc_dimer, exact=True)
     Y_dimer = Calculate_yield_can(Nblue, Nred, pc_list)
-
     return Y_dimer, pc_list
+    
 
 def get_argparse():
     parser = argparse.ArgumentParser(description='Compute the yield of a simple dimer system')
@@ -356,6 +385,47 @@ if __name__ == "__main__":
 
     parser = get_argparse()
     args = vars(parser.parse_args())
+
+
+
+
+    d0 = 8.3
+    target_yield = 0.4
+
+    def yield_fuc(d0, args, seed):
+        args['morse_d0'] = d0
+        yi, _ = run(args, seed)
+        return yi
+
+
+    def loss_fuc(params, args, target_yield, seed):
+        d0 = params['d0']
+        yi = yield_fuc(d0, args, seed)
+        return (yi-target_yield)**2, yi
+
+
+    params = {'d0': d0}
+
+    grad_yield = jit(jacrev(loss_fuc, has_aux=True))
+
+    first_eval_start = time.time()
+    grads, curr_yield = grad_yield(params, args, target_yield, seed=9)
+    first_eval_end = time.time()
+    print(f"First eval took: {first_eval_end - first_eval_start} seconds")
+
+    second_eval_start = time.time()
+    grads, curr_yield = grad_yield(params, args, target_yield, seed=9)
+    second_eval_end = time.time()
+    print(f"Second eval took: {second_eval_end - second_eval_start} seconds")
+
+
+
+
+
+
+
+
+    pdb.set_trace()
 
     d0 = 8.3
     target_yield = 0.4
