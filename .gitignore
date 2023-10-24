@@ -7,3 +7,20 @@ __pycache__
 **/**/__pycache__
 
 *.txt
+
+
+*.pdf
+**/*.pdf
+**/**/*.pdf
+**/**/**/*.pdf
+
+*.png
+**/*.png
+**/**/*.png
+**/**/**/*.png
+
+
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
+**/**/.ipynb_checkpoints/
+**/**/**/.ipynb_checkpoints/
