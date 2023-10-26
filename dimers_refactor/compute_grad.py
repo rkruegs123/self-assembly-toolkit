@@ -22,6 +22,19 @@ from jax.config import config
 config.update("jax_enable_x64", True)
 
 
+
+some_big_number = 100
+factorial_table = jnp.array([osp.special.factorial(x) for x in range(some_big_number)])
+comb_table = onp.zeros((some_big_number, some_big_number))
+for i in range(some_big_number):
+    for j in range(some_big_number):
+        if i >= j:
+            comb_table[i, j] = osp.special.comb(i, j)
+comb_table = jnp.array(comb_table)
+
+
+
+
 def get_energy_fns(args):
 
     Nbb = 2
@@ -248,7 +261,7 @@ def calc_jmean(f, key, nrandom=100000):
     # error = osp.stats.sem(Js)
     error = standard_error(Js)
 
-    return mean ,error
+    return mean, error
 
 
 def calculate_zc(key, energy_fn, all_q0, all_ppos, sigma, kBT, V):
@@ -270,6 +283,22 @@ def calculate_zc(key, energy_fn, all_q0, all_ppos, sigma, kBT, V):
 
 
 
+N_mon_real = 9
+def Calculate_pc_list(N_mon, Zc_monomer, Zc_dimer, exact=False):
+    # nd_fact = jax_factorial(N_mon_real)
+
+    def Mc(Nd):
+        return comb_table[N_mon_real, Nd] * comb_table[N_mon_real, Nd] * factorial_table[Nd]
+
+    def Pc(Nd):
+        return Mc(Nd) * (Zc_dimer**Nd) * (Zc_monomer**(N_mon_real-Nd)) * (Zc_monomer**(N_mon_real-Nd))
+
+    pc_list = vmap(Pc)(jnp.arange(N_mon_real+1))
+    return pc_list / jnp.sum(pc_list)
+
+
+
+"""
 def Calculate_pc_list(N_mon, Zc_monomer, Zc_dimer, exact=False):
     def Mc(Nd):
         return osp.special.comb(Nb, Nd, exact=exact) \
@@ -283,6 +312,7 @@ def Calculate_pc_list(N_mon, Zc_monomer, Zc_dimer, exact=False):
     pc_list = pc_list / jnp.sum(pc_list)
 
     return pc_list
+"""
 
 
 # NOTE: the following code relaxes the assumption that Nb == Nr, but is not immediately jit-able. We could fix this if we want, but we don't care for now
@@ -304,9 +334,18 @@ def Calculate_pc_list(Nb, Nr, Zc_monomer, Zc_dimer, exact=False):
 """
 
 
+def Calculate_yield_can(Nb_dummy, Nr_dummy, pc_list):
+    Nb = 9
+    Nr = 9
+
+    Y_list = vmap(lambda Nd: Nd / (Nb+Nr-Nd))(jnp.arange(N_mon_real+1))
+    return jnp.dot(Y_list, pc_list)
+
+"""
 def Calculate_yield_can(Nb, Nr, pc_list):
     Y_list = jnp.array([Nd / (Nb+Nr-Nd) for Nd in range(len(pc_list))])
     return jnp.dot(Y_list, pc_list)
+"""
 
 def run(args, seed=0):
     """
@@ -344,10 +383,20 @@ def run(args, seed=0):
     # Note: this one works
     # return Zc_dimer, None
 
-    # Note: this one doesn't work
+    # Note: maybe this will work
+    # pc_list = Calculate_pc_list(args['num_monomer'], Zc_monomer, Zc_dimer, exact=True)
+    # return jnp.mean(pc_list), None
+
+    # Note: what about this one?
     pc_list = Calculate_pc_list(args['num_monomer'], Zc_monomer, Zc_dimer, exact=True)
     Y_dimer = Calculate_yield_can(Nblue, Nred, pc_list)
-    return Y_dimer, pc_list
+    return Y_dimer, None
+    
+
+    # Note: this one doesn't work
+    # pc_list = Calculate_pc_list(args['num_monomer'], Zc_monomer, Zc_dimer, exact=True)
+    # Y_dimer = Calculate_yield_can(Nblue, Nred, pc_list)
+    # return Y_dimer, pc_list
     
 
 def get_argparse():
@@ -386,6 +435,24 @@ if __name__ == "__main__":
     parser = get_argparse()
     args = vars(parser.parse_args())
 
+
+    seed = 0
+    def get_yield(d0):
+        args['morse_d0'] = d0
+        yi, _ = run(args, seed)
+        return yi
+    get_yield = jit(get_yield)
+
+    d0s = onp.arange(3, 13, 0.1)
+    all_yields = list()
+    for d0 in d0s:
+        all_yields.append(get_yield(d0))
+
+    pdb.set_trace()
+
+
+    plt.plot(d0s, all_yields)
+    plt.savefig("to_view.png")
 
 
 
