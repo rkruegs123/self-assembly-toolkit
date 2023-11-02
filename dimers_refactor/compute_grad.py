@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import time
 from random import randint
 from jax import lax
+from functools import partial
 
 from jax import random
 from jax import jit, grad, vmap, value_and_grad, hessian, jacfwd, jacrev
@@ -20,6 +21,21 @@ from utils import euler_scheme, convert_to_matrix, ref_ppos, ref_q0
 
 from jax.config import config
 config.update("jax_enable_x64", True)
+
+
+
+@partial(jit, static_argnums=(1,))
+def safe_mask(mask, fn, operand, placeholder=0):
+  masked = jnp.where(mask, operand, 0)
+  return jnp.where(mask, fn(masked), placeholder)
+
+def distance(dR):
+  dr = jnp.sum(dR ** 2, axis=-1)
+  return safe_mask(dr > 0, jnp.sqrt, dr)
+
+
+# dist_fn = jnp.linalg.norm
+dist_fn = distance
 
 
 
@@ -76,7 +92,8 @@ def get_energy_fns(args):
         # Add repulsive interaction between spheres
         def j_repulsive_fn(j, pos1):
             pos2 = real_ppos[1][j]
-            r = jnp.linalg.norm(pos1-pos2)
+            # r = jnp.linalg.norm(pos1-pos2)
+            r = dist_fn(pos1-pos2)
             return potentials.repulsive(
                 r, rmin=0, rmax=sphere_radius*2,
                 A=args['rep_A'], alpha=args['rep_alpha'])
@@ -87,24 +104,14 @@ def get_energy_fns(args):
             return jnp.sum(all_j_terms)
 
         repulsive_sm = jnp.sum(vmap(i_repulsive_fn)(jnp.arange(3)))
-        tot_energy += repulsive_sm
+        tot_energy += repulsive_sm        
 
-        """
-        for i in range(3):
-            pos1 = real_ppos[0][i]
-            for j in range(3):
-                pos2 = real_ppos[1][j]
-                r = jnp.linalg.norm(pos1-pos2)
-                tot_energy += potentials.repulsive(
-                    r, rmin=0, rmax=sphere_radius*2,
-                    A=args['rep_A'], alpha=args['rep_alpha'])
-        """
         
-
         # Add attraction b/w blue patches
         pos1 = real_ppos[0][3]
         pos2 = real_ppos[1][3]
-        r = jnp.linalg.norm(pos1-pos2)
+        # r = jnp.linalg.norm(pos1-pos2)
+        r = dist_fn(pos1-pos2)
         tot_energy += potentials.morse_x(
             r, rmin=0, rmax=morse_rcut,
             D0=args['morse_d0']*args['morse_d0_b'],
@@ -114,7 +121,8 @@ def get_energy_fns(args):
         # Add attraction b/w green patches
         pos1 = real_ppos[0][5]
         pos2 = real_ppos[1][4]
-        r = jnp.linalg.norm(pos1-pos2)
+        # r = jnp.linalg.norm(pos1-pos2)
+        r = dist_fn(pos1-pos2)
         tot_energy += potentials.morse_x(
             r, rmin=0, rmax=morse_rcut,
             D0=args['morse_d0']*args['morse_d0_g'],
@@ -124,7 +132,8 @@ def get_energy_fns(args):
         # Add attraction b/w red patches
         pos1 = real_ppos[0][4]
         pos2 = real_ppos[1][5]
-        r = jnp.linalg.norm(pos1-pos2)
+        # r = jnp.linalg.norm(pos1-pos2)
+        r = dist_fn(pos1-pos2)
         tot_energy += potentials.morse_x(
             r, rmin=0, rmax=morse_rcut,
             D0=args['morse_d0']*args['morse_d0_r'],
@@ -436,45 +445,30 @@ if __name__ == "__main__":
     args = vars(parser.parse_args())
 
 
-    seed = 0
-    def get_yield(d0):
-        args['morse_d0'] = d0
-        yi, _ = run(args, seed)
-        return yi
-    get_yield = jit(get_yield)
-
-    d0s = onp.arange(3, 13, 0.1)
-    all_yields = list()
-    for d0 in d0s:
-        all_yields.append(get_yield(d0))
-
-    pdb.set_trace()
-
-
-    plt.plot(d0s, all_yields)
-    plt.savefig("to_view.png")
-
 
 
     d0 = 8.3
     target_yield = 0.4
 
-    def yield_fuc(d0, args, seed):
+    def yield_fn(d0, args, seed):
         args['morse_d0'] = d0
         yi, _ = run(args, seed)
         return yi
 
 
-    def loss_fuc(params, args, target_yield, seed):
+    def loss_fn(params, args, target_yield, seed):
         d0 = params['d0']
-        yi = yield_fuc(d0, args, seed)
+        yi = yield_fn(d0, args, seed)
         return (yi-target_yield)**2, yi
 
 
     params = {'d0': d0}
 
-    grad_yield = jit(jacrev(loss_fuc, has_aux=True))
+    grad_yield = jit(jacrev(loss_fn, has_aux=True))
 
+
+    # Test 1: Do a single forward calculation
+    """
     first_eval_start = time.time()
     grads, curr_yield = grad_yield(params, args, target_yield, seed=9)
     first_eval_end = time.time()
@@ -486,33 +480,42 @@ if __name__ == "__main__":
     print(f"Second eval took: {second_eval_end - second_eval_start} seconds")
 
 
+    pdb.set_trace()
+    """
 
 
-
-
-
+    # Test 2: Do a range of forward calculations
+    """
+    d0s = onp.arange(3, 13, 0.1)
+    all_yields = list()
+    all_grads = list()
+    for d0 in tqdm(d0s):
+        params = {'d0': d0}
+        grads, curr_yield = grad_yield(params, args, target_yield, seed=9)
+        all_yields.append(curr_yield)
+        all_grads.append(grads['d0'])
 
     pdb.set_trace()
+
+    
+    plt.plot(d0s, all_yields)
+    plt.savefig("yields.png")
+    plt.clf()
+
+    plt.plot(d0s, all_grads)
+    plt.savefig("grads.png")
+    plt.clf()
+
+    pdb.set_trace()
+    """
+    
 
     d0 = 8.3
     target_yield = 0.4
 
-    def yield_fuc(d0, args, seed):
-        args['morse_d0'] = d0
-        yi, _ = run(args, seed)
-        return yi
 
-
-    def loss_fuc(params, args, target_yield, seed):
-        d0 = params['d0']
-        yi = yield_fuc(d0, args, seed)
-        return (yi-target_yield)**2, yi
-    grad_yield = jit(jacrev(loss_fuc, has_aux=True))
-    # grad_yield = jacfwd(loss_fuc)
-
-
-    num_iters = 100
-    learning_rate = 0.1
+    num_iters = 250
+    learning_rate = 0.01
     optimizer = optax.adam(learning_rate)
     params = {'d0': d0}
     opt_state = optimizer.init(params)
@@ -527,20 +530,22 @@ if __name__ == "__main__":
         grads, curr_yield = grad_yield(params, args, target_yield, seed=9)
         # grads = grads['d0']
         # grads_numeric = grads.item()
-        print(f"\t- grad: {grads}:")
-        print(f"\t- current yield: {curr_yield}:")
+        curr_d0_grad = grads['d0']
+        print(f"\t- grad: {float(curr_d0_grad)}")
+        print(f"\t- current yield: {curr_yield}")
+
+        curr_d0 = params['d0']
+        print(f"\t- current d0: {float(curr_d0)}")
 
         with open(yield_path, "a") as f:
             f.write(f"{curr_yield}\n")
         with open(grad_path, "a") as f:
-            f.write(f"{grads}\n")
+            f.write(f"{curr_d0_grad}\n")
         with open(d0_path, "a") as f:
-            curr_d0 = params['d0']
             f.write(f"{curr_d0}\n")
 
         updates, opt_state = optimizer.update(grads, opt_state)
         params = optax.apply_updates(params, updates)
-        # params['d0'] = max(7.8, min(params['d0'], 8.4))  ##what I added
 
     pdb.set_trace()
 
