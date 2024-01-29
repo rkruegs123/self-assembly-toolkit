@@ -21,7 +21,7 @@ Notes:
 
 
 vertex_species = 0
-n_species = 7
+n_species = 4
 
 # Helper functions
 
@@ -43,15 +43,13 @@ num_building_blocks = 2
 
 a = 1 # distance of the center of the spheres from the BB COM
 b = .3 # distance of the center of the patches from the BB COM
-shape1 = onp.array([[-a, 0., b], # first patch
-    [-a, b*onp.cos(onp.pi/6.), -b*onp.sin(onp.pi/6.)], # second patch
-    [-a, -b*onp.cos(onp.pi/6.), -b*onp.sin(onp.pi/6.)], 
-    [0., 0., a],
+shape1 = onp.array([
+    [0., 0., a], # first sphere
     [0., a*onp.cos(onp.pi/6.), -a*onp.sin(onp.pi/6.)], # second sphere
     [0., -a*onp.cos(onp.pi/6.), -a*onp.sin(onp.pi/6.)], # third sphere
     [a, 0., b], # first patch
     [a, b*onp.cos(onp.pi/6.), -b*onp.sin(onp.pi/6.)], # second patch
-    [a, -b*onp.cos(onp.pi/6.), -b*onp.sin(onp.pi/6.)] # third patch
+    [a, -b*onp.cos(onp.pi/6.), -b*onp.sin(onp.pi/6.)]  # third patch
 ])
 
 # these are the positions of the spheres within the building block
@@ -67,13 +65,12 @@ shapes = jnp.array([shape1, shape2])
 
 
 separation = 2.
-noise = 1e-14
+noise = 1e-15
 rb_info = jnp.array([-separation/2.0, noise, 0, 0, 0, 0,
                      separation/2.0, 0, 0, 0, 0, 0], dtype=jnp.float64)
 
 vertex_radius = a
 patch_radius = 0.2*a
-
 
 def get_positions(q, ppos):
     Mat = []
@@ -87,6 +84,28 @@ def get_positions(q, ppos):
 
     return real_ppos
 
+#get_positions(rb_info, shapes)
+
+
+#points = get_positions(rb_info, shapes)
+#points = onp.array(points).reshape(-1,3)
+target_species = [ 0, 0, 0, 1, 2, 3, 0, 0, 0, 1, 3, 2]
+target_species = jnp.array(target_species)
+#pdb.set_trace()
+
+test_rs_morse = onp.linspace(-0.25, 1.0, 100)
+morse_d0 = 10.0
+morse_a = 5.0
+morse_r0 = 0.0
+morse_rcut = 8. / morse_a + morse_r0
+morsex_energies = potentials.morse_x(
+    test_rs_morse, rmin=0, rmax=morse_rcut,
+    D0=morse_d0,
+    alpha=morse_a, r0=morse_r0,
+    ron=morse_rcut/2.)
+
+
+## Soft sphere
 
 
 # Setup soft-sphere repulsion between table values
@@ -115,7 +134,7 @@ morse_eps_table = jnp.array(morse_eps_table)
 morse_weak_alpha = 1e-12 
 morse_alpha_table = onp.full((n_species, n_species), morse_weak_alpha)
 morse_strong_alpha = 5.0
-morse_alpha_table[onp.array([2, 3, 4, 5]), onp.array([3, 2, 5, 4])] = morse_strong_alpha
+morse_alpha_table[onp.array([1, 2, 3]), onp.array([1, 2, 3])] = morse_strong_alpha
 morse_alpha_table = jnp.array(morse_alpha_table)
 
 
@@ -141,31 +160,28 @@ def pairwise_morse(ipos, jpos, i_species, j_species):
                      
     return potentials.morse_x(dr, rmin=morse_r0, rmax=morse_rcut, D0=morse_d0, 
                    alpha=morse_alpha, r0=morse_r0, ron=morse_rcut/2.)                    
-                                      
                      
                      
                      
 def get_energy(q, pos, species):
     
     positions = get_positions(q, pos)
-    
-    pos1 = positions[0] 
-    pos2 = positions[1] 
-                 
-    species1 = species[:3]  
-    species2 = species[3:]
-    species1 = onp.repeat(species1, 3) 
-    species2 = onp.repeat(species2, 3)
-    
+
+    pos1 = positions[0]  
+    pos2 = positions[1]  
+
+    species1 = species[:6]  
+    species2 = species[6:12]  
 
     morse_func = vmap(vmap(pairwise_morse, in_axes=(None, 0, None, 0)), in_axes=(0, None, 0, None))
     tot_energy = jnp.sum(morse_func(pos1, pos2, species1, species2))
     
     inner_rep = vmap(pairwise_repulsion, in_axes=(None, 0, None, 0))
     rep_func = vmap(inner_rep, in_axes=(0, None, 0, None))
-    tot_energy += jnp.sum(rep_func(pos1, pos2, species1, species2))               
+    tot_energy += jnp.sum(rep_func(pos1, pos2, species1, species2))
 
-    return tot_energy                 
+    return tot_energy
+               
  
 def add_variables(ma, mb):
     """
@@ -245,10 +261,10 @@ def get_zrot(energy_fn, q, pos, species, seed=0, nrandom=100000):
     
     return Jtilde
 
-target_species = [1,0,2,3,0,4] 
+      
 print(get_energy(rb_info, shapes, target_species))
-print(get_zrot(get_energy, rb_info, shapes, target_species))   
-
-
+print(get_zrot(get_energy, rb_info, shapes, target_species))
+              
                      
+              
                      
