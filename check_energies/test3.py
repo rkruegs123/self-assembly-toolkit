@@ -20,94 +20,33 @@ from jax.config import config
 config.update("jax_enable_x64", True)
 
 
-"""
-Defining and finding all monomer species combinations
+def load_species_combinations(filename):
+    with open(filename, 'rb') as f:
+        data = pickle.load(f)
+    return data
 
-"""
+# Load the data
+data = load_species_combinations('species_combination.txt')
 
-monomers = {
-    'A': [1, 0, 2],
-    'B': [3, 0, 4],
-    'C': [5, 0, 6],
-}
+# species combinations for different configurations
+mon_pc_species = data['mon_pc_species']
+dimer_pc_species = data['dimer_pc_species']
+trimer_pc_species = data['trimer_pc_species']
 
+# mon count for each configuration 
+A_mon_counts = data['A_mon_counts']
+A_dimer_counts = data['A_dimer_counts']
+A_trimer_counts = data['A_trimer_counts']
 
-monomers_prime = {f"{k}'": v[::-1] for k, v in monomers.items()}
+B_mon_counts = data['B_mon_counts']
+B_dimer_counts = data['B_dimer_counts']
+B_trimer_counts = data['B_trimer_counts']
 
-all_monomers = {**monomers, **monomers_prime}
+C_mon_counts = data['C_mon_counts']
+C_dimer_counts = data['C_dimer_counts']
+C_trimer_counts = data['C_trimer_counts']
 
-def flatten_and_compare(struct1, struct2):
-    struct1_nums = sum([all_monomers[mon] for mon in struct1], [])
-    struct2_nums = sum([all_monomers[mon] for mon in struct2], [])
-    return struct1_nums == struct2_nums[::-1]
-
-all_combinations = []
-for r in range(1, 4):  
-    all_combinations.extend(itertools.combinations_with_replacement(all_monomers.keys(), r))
-
-
-filtered_combinations = []
-for comb in all_combinations:
-    if all(not flatten_and_compare(comb, existing_comb) for existing_comb in filtered_combinations):
-        filtered_combinations.append(comb)
-        
-mon_list = []
-dimer_list = []
-trimer_list = []
-
-for comb in filtered_combinations:
-    if len(comb) == 1:  # Monomer
-        mon_list.append(comb)
-    elif len(comb) == 2:  # Dimer
-        dimer_list.append(comb)
-    elif len(comb) == 3:  # Trimer
-        trimer_list.append(comb)
-        
-def count_monomers(combinations, monomer_name):
-    """
-    Count how many times a specific monomer and its mirrored version appear in each combination.
-    """
-    monomer_counts = []
-    for comb in combinations:
-        count = 0        
-        for mon in comb:
-            if mon == monomer_name or mon == f"{monomer_name}'":  
-                count += 1
-        
-        monomer_counts.append(count)
-    
-    return monomer_counts
-
-A_mon_counts = jnp.array(count_monomers(mon_list, 'A'))
-A_dimer_counts = jnp.array(count_monomers(dimer_list, 'A'))
-A_trimer_counts = jnp.array(count_monomers(trimer_list, 'A'))
-
-B_mon_counts = jnp.array(count_monomers(mon_list, 'B'))
-B_dimer_counts = jnp.array(count_monomers(dimer_list, 'B'))
-B_trimer_counts = jnp.array(count_monomers(trimer_list, 'B'))
-
-C_mon_counts = jnp.array(count_monomers(mon_list, 'C'))
-C_dimer_counts = jnp.array(count_monomers(dimer_list, 'C'))
-C_trimer_counts = jnp.array(count_monomers(trimer_list, 'C'))
-        
-       
-def combination_to_string(comb):
-    return ' '.join(comb)
-
-mon_list = [combination_to_string(comb) for comb in mon_list]
-dimer_list = [combination_to_string(comb) for comb in dimer_list]
-trimer_list = [combination_to_string(comb) for comb in trimer_list]
-
-def get_numeric_combination(comb_str):
-
-    monomer_names = comb_str.split()
-    numeric_combination = sum([all_monomers[name] for name in monomer_names], [])    
-    return numeric_combination
-
-
-mon_pc_species = jnp.array([get_numeric_combination(mon) for mon in mon_list])
-dimer_pc_species = jnp.array([get_numeric_combination(dimer) for dimer in dimer_list])
-trimer_pc_species = jnp.array([get_numeric_combination(trimer) for trimer in trimer_list])
+#pdb.set_trace()
 
 
 """
@@ -447,10 +386,7 @@ def process_part(energy_fn, q, pos, species, chunk_size=10):
 Zc_dimer = process_part(energy_tot, dimer_rb, dimer_shapes, dimer_pc_species, chunk_size=10)
 Zc_trimer = process_part(energy_tot, trimer_rb, trimer_shapes, trimer_pc_species, chunk_size=10)
 Zc_mon = vmap(calculate_zc_mon, in_axes=(None, None, None, 0))(energy_tot, mon_rb, mon_shape, mon_pc_species)
-#Zc_dimer = vmap(calculate_zc, in_axes=(None, None, None, 0))(energy_tot, dimer_rb, dimer_shapes, dimer_pc_species)
-#Zc_trimer = vmap(calculate_zc, in_axes=(None, None, None, 0))(energy_tot, trimer_rb, trimer_shapes, trimer_pc_species)
-#Zc_dimer
-#pdb.set_trace()
+
 Zc_all= jnp.concatenate([Zc_mon, Zc_dimer, Zc_trimer])
 Zc_all_log= jnp.log(Zc_all)
 
@@ -462,43 +398,64 @@ C_count = jnp.concatenate([C_mon_counts, C_dimer_counts, C_trimer_counts])
 
 
 
+
 def get_conc_eqs(conc, V, log_zc_list, copies_per_structure):
-    # Note: we assume that the monomers of chain_idxs correspond to the the first n_chains
-    # possible structures
 
     eqs = list()
     
     
     # First, construct one equation enforce conservation law
-    def cons_law(bb_log_concs):
-        return jnp.log(conc) - jnp.log(jnp.dot(jnp.array(copies_per_structure), jnp.exp(bb_log_concs)))
+    def cons_law_A(bb_log_concs):
+        return jnp.log(conc) - jnp.dot(copies_per_structure[0,:], jnp.exp(bb_log_concs))
+       
+    
+    def cons_law_B(bb_log_concs):
+        return jnp.log(conc) - jnp.dot(copies_per_structure[1,:], jnp.exp(bb_log_concs))
+    
+    def cons_law_C(bb_log_concs):
+        return jnp.log(conc) - jnp.dot(copies_per_structure[2,:], jnp.exp(bb_log_concs))
+       
+    eqs.append(deepcopy(cons_law_A))
+    eqs.append(deepcopy(cons_law_B))
+    eqs.append(deepcopy(cons_law_C))
 
-    eqs.append(deepcopy(cons_law))
 
-
-    log_monomer_energy = log_zc_list[0:4] #the first 3 are the monomer strutures
-
-    # Then, for each non-monomeric structure, add a mass-action constraint
-    # Note: need a maker function to make functions unique
-    def make_mass_action_eq(struct_idx, copies):
+    def make_mass_action_eq_A(struct_idx, copies):
         def f(bb_log_concs):
 
-            monomer_log_conc = bb_log_concs[0:4] #the first 3 are the monomer strctures
-            log_monomer_zc = log_zc_list[0:4] #the first 3 are the monomer strctures
+            monomer_log_conc = bb_log_concs[0:3] #the first 3 are the monomer strctures
+            log_monomer_zc = log_zc_list[0:3] #the first 3 are the monomer strctures
 
-            s1 = copies * log_monomer_zc
+            s1 = jnp.array([copies[0] * log_monomer_zc[0], copies[1] * log_monomer_zc[1], copies[2] * log_monomer_zc[2]])
 
-            s2 = copies * (jnp.log(V) + monomer_log_conc)
+            s2 =  jnp.array([copies[0] * (jnp.log(V) + monomer_log_conc[0]), copies[1] * (jnp.log(V) + monomer_log_conc[1]),
+                             copies[2] * (jnp.log(V) + monomer_log_conc[2])])
 
-            # FIXME: absolute value? How does fsolve handle negative values?
-            return log_zc_list[struct_idx] - s1 - jnp.log(V) - bb_log_concs[struct_idx] + s2
+            return log_zc_list[struct_idx] -  jnp.prod(s1) - jnp.log(V) - bb_log_concs[struct_idx] + jnp.prod(s2)
         return f
+    def make_mass_action_eq_A(struct_idx, copies):
+        def f(bb_log_concs):
 
-    #for i, copies in enumerate(copies_per_structure): # need index to get conc
-       # if copies == 1 and i == 0 or i == 1 or i == 2:
-            #assert(i == 0 and copies == 1)
-            #assert(i == 0 )
-            #continue
+            monomer_log_conc = bb_log_concs[0:3] #the first 3 are the monomer strctures
+            log_monomer_zc = log_zc_list[0:3] #the first 3 are the monomer strctures
+
+            s1 = jnp.array([copies[0] * log_monomer_zc[0], copies[1] * log_monomer_zc[1], copies[2] * log_monomer_zc[2]])
+
+            s2 =  jnp.array([copies[0] * (jnp.log(V) + monomer_log_conc[0]), copies[1] * (jnp.log(V) + monomer_log_conc[1]),
+                             copies[2] * (jnp.log(V) + monomer_log_conc[2])])
+
+            return log_zc_list[struct_idx] -  jnp.prod(s1) - jnp.log(V) - bb_log_concs[struct_idx] + jnp.prod(s2)
+        return f
+    
+    
+    
+    for i in enumerate(copies_per_structure): 
+        if i == 0:
+            continue 
+        if i == 1:
+            continue 
+        if i == 2:
+            continue
 
         mass_action_eq = make_mass_action_eq(i, copies)
         eqs.append(deepcopy(mass_action_eq))
@@ -557,9 +514,88 @@ def calc_concentrations(conc, V, zc_list, copies_per_structure, tol=1e-10, verbo
 
     # Assuming final_params is desired to be in the original (not log) space
     return jnp.exp(final_params)
+"""
+def get_conc_eqs(conc, V, log_zc_list, copies_per_structure):
+    eqs = []
+
+    # Conservation laws for A, B, and C
+    def cons_law_A(bb_log_concs):
+        return jnp.log(conc[0]) - jnp.log(jnp.exp(bb_log_concs[0]))
+
+    def cons_law_B(bb_log_concs):
+        return jnp.log(conc[1]) - jnp.log(jnp.exp(bb_log_concs[1]))
+
+    def cons_law_C(bb_log_concs):
+        return jnp.log(conc[2]) - jnp.log(jnp.exp(bb_log_concs[2]))
+
+    eqs.extend([cons_law_A, cons_law_B, cons_law_C])
+
+    # Ensure the first three structures are monomers with one copy each
+    assert all(copies == 1 for copies in copies_per_structure[:3].tolist()), "First three structures must be monomers with one copy each."
 
 
-print(calc_concentrations(0.1, 1, Zc_all_log, A_count))
+    # Mass-action constraints for the remaining structures
+    for i, copies in enumerate(copies_per_structure[3:], start=3):
+        def make_mass_action_eq(struct_idx, copies):
+            def f(bb_log_concs):
+                # This needs to factor in the specific monomer contributions
+                monomer_log_conc = bb_log_concs[:3]  # Extract log concs for A, B, C
+                s1 = jnp.dot(copies[:3], log_zc_list[:3])  # Dot product for monomer contributions
+                s2 = jnp.dot(copies[:3], (jnp.log(V) + monomer_log_conc))
+                return log_zc_list[struct_idx] - s1 - jnp.log(V) - bb_log_concs[struct_idx] + s2
+            return f
+
+        # Add mass-action constraint for the current structure
+        eqs.append(make_mass_action_eq(i, copies))
+
+    return eqs
+
+
+def calc_concentrations(conc_list, V, zc_list, copies_per_structure, tol=1e-10, verbose=True):
+    n_possible_structures = len(zc_list)
+    
+    # Define the loss function
+    def loss(bb_log_concs):
+        eqs = get_conc_eqs(conc_list, V, zc_list, copies_per_structure)
+        eq_vals = jnp.array([eq(bb_log_concs) for eq in eqs])
+        return jnp.sum(jnp.abs(eq_vals))
+    
+    # Initial guess for the logarithmic concentrations
+    total_conc = sum(conc_list)  # Assuming conc_list contains the total concentration for each monomer
+    eq_conc_guess = jnp.log(total_conc / n_possible_structures)
+    init_params = jnp.full((n_possible_structures,), eq_conc_guess)
+
+    # Set up the optimizer
+    step_size = 1e-2
+    exp_decay = optax.exponential_decay(step_size, transition_steps=100000, decay_rate=1e-3)
+    optimizer = optax.adam(exp_decay)
+    opt_state = optimizer.init(init_params)
+
+    # Optimization loop
+    @jit
+    def update(params, opt_state):
+        value, grads = value_and_grad(loss)(params)
+        updates, new_opt_state = optimizer.update(grads, opt_state)
+        new_params = optax.apply_updates(params, updates)
+        return new_params, new_opt_state, value
+
+    params = init_params
+    for epoch in range(100000):
+        params, opt_state, loss_value = update(params, opt_state)
+        if verbose and epoch % 10000 == 0:
+            print(f"Epoch {epoch}, Loss {loss_value}")
+
+    final_params = params
+
+    return jnp.exp(final_params)
+
+"""
+mon_indecies = jnp.arange(3)
+conc_list = jnp.array([0.1,0.1,0.1])
+mon_copies = jnp.array([A_count, B_count, C_count])
+
+#pdb.set_trace()
+print(calc_concentrations(0.1 , 1, Zc_all_log, mon_copies))
 
 #print(energy_tot( trimer_rb, trimer_shapes, trimer_species))  
 #print(get_zrot(energy_tot, trimer_rb, trimer_shapes, trimer_species)) 
