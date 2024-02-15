@@ -14,11 +14,12 @@ from copy import deepcopy
 from functools import reduce
 import pickle
 from scipy.optimize import fsolve
-from jaxopt import BFGS, objective
+from jaxopt import BFGS, objective, GradientDescent, ScipyMinimize
 
 
-from jax.config import config
-config.update("jax_enable_x64", True)
+
+#from jax.config import config
+#config.update("jax_enable_x64", True)
 
 
 def load_species_combinations(filename):
@@ -26,8 +27,8 @@ def load_species_combinations(filename):
         data = pickle.load(f)
     return data
 
-# Load the data
-data = load_species_combinations('species_test.txt')
+
+data = load_species_combinations('species_test.pkl')
 
 # species combinations for different configurations
 mon_pc_species = data['mon_pc_species']
@@ -229,7 +230,7 @@ def dummy_zc(energy_fn, q, pos, species, kBT=1, V=1, seed=0, nrandom=100000):
 
     return boltzmann_weight 
 
-
+"""
 Zc_mon = jnp.array([1])
 Zc_dimer = vmap(dummy_zc, in_axes=(None, None, None, 0))(energy_tot, dimer_rb, dimer_shapes, dimer_pc_species)
 Zc_trimer = vmap(dummy_zc, in_axes=(None, None, None, 0))(energy_tot, trimer_rb, trimer_shapes, trimer_pc_species)
@@ -254,11 +255,11 @@ copies_per_structure = jnp.array(A_count)
 
 n = 1
 
-def loss_fn(structure_concentrations):
+def loss_fn(log_structure_concentrations):
     # first n strcutrs are the monomers
     # last (n-s) structures are not the monomers
    
-    s = len(structure_concentrations)
+    s = len(log_structure_concentrations)
     log_mon_conc = jnp.log(conc[0:n])
     log_mon_zc = log_zc_list[0:n]
     
@@ -266,8 +267,9 @@ def loss_fn(structure_concentrations):
 
     def monomer_loss_fn(monomer_idx):
         
-        monomer_val = jnp.log(monomer_idx) - jnp.dot(copies_per_structure[monomer_idx], jnp.exp(structure_concentrations))
-        return abs(monomer_val - log_mon_conc[monomer_idx])
+        monomer_val = jnp.log(conc[monomer_idx]) - jnp.dot(jnp.log(copies_per_structure[monomer_idx]),jnp.exp(log_structure_concentrations))
+
+        return jnp.abs(monomer_val)
 
     def structure_loss_fn(struct_idx):
         
@@ -289,19 +291,20 @@ def loss_fn(structure_concentrations):
         #operation = lambda x, y: x * (jnp.log(V) + y)
         #s2 = vmap(operation, in_axes=(0, 0))(copies_per_structure, log_mon_conc[:, None])
 
-        structure_val = log_zc_list[struct_idx] -  jnp.prod(s1) - jnp.log(V) - structure_concentrations[struct_idx] + jnp.prod(s2)
-        return abs((V * structure_concentrations[struct_idx]) - structure_val)
+        structure_val = log_zc_list[struct_idx] -  jnp.sum(s1) - jnp.log(V) - log_structure_concentrations[struct_idx] + jnp.sum(s2)
+        return jnp.abs(structure_val)
 
     monomer_loss = vmap(monomer_loss_fn)(jnp.arange(n))
-    structure_loss = vmap(structure_loss_fn)(jnp.arange(n, s))
+    structure_loss = vmap(structure_loss_fn)(jnp.arange(n, s+1))
     
-    total_loss = jnp.sum(monomer_loss) + jnp.sum(structure_loss)
+    
+    total_loss =  jnp.sum(structure_loss) + jnp.sum(monomer_loss) 
 
     return total_loss
 
 
 def optimize_loss(n, initial_guess):
-    solver = BFGS(fun=lambda x: loss_fn(x), maxiter=100)
+    solver = BFGS(fun=lambda x: loss_fn(x), maxiter=1000)
 
     result = solver.run(initial_guess)
     optimized_structure_concentrations = result.params
@@ -309,11 +312,183 @@ def optimize_loss(n, initial_guess):
 
 
 # Assuming the last two configurations might be slightly more probable
-initial_guess = jnp.array([0.05, 0.05, 0.05, 0.1, 0.1, 0.15, 0.2, 0.3])
-  # Initial guess for structure concentrations
+uniform_conc = conc[0]/len(Zc_all)
+initial_guess = jnp.repeat(uniform_conc,8)
+# Initial guess for structure concentrations
+uniform_conc = conc[0]/len(Zc_all)
+
+pdb.set_trace()
 optimized_concentrations = optimize_loss(n, initial_guess)
 print("Optimized Concentrations:", optimized_concentrations)
 
+"""
+                     
+                     
 
-                     
-                     
+
+
+
+Zc_mon = jnp.array([1])
+Zc_dimer = vmap(dummy_zc, in_axes=(None, None, None, 0))(energy_tot, dimer_rb, dimer_shapes, dimer_pc_species)
+Zc_trimer = vmap(dummy_zc, in_axes=(None, None, None, 0))(energy_tot, trimer_rb, trimer_shapes, trimer_pc_species)
+
+
+Zc_all= jnp.concatenate([Zc_mon, Zc_dimer, Zc_trimer])
+log_zc_list = jnp.log(Zc_all)
+
+
+#mon_indecies = jnp.arange(3)
+V = 1
+conc = jnp.array([0.1])
+copies_per_structure = jnp.array([A_count])
+
+# Defined:
+# number of monomoers: n
+# number of structurs (including monomers): s
+# conc: (n,)
+# V: float
+# log_zc_list: (s,)
+# copies_per_structure: (n, s)
+
+# first n strcutrs are the monomers
+# last (n-s) structures are not the monomers
+n = 1
+log_mon_conc = jnp.log(conc[0:n])
+log_mon_zc = log_zc_list[0:n]
+s = Zc_all.shape[0]
+
+
+
+
+"""    
+
+def loss_fn(log_structure_concentrations):
+    
+    def multiply(row_of_copies, single_log_monomer_zc):
+        return row_of_copies * single_log_monomer_zc
+
+
+    def monomer_loss_fn(mon_idx):
+        
+        #monomer_val = log_mon_conc[monomer_idx] - jnp.log(jnp.sum(jnp.dot(copies_per_structure, jnp.exp(log_structure_concentrations))))
+        n_sa = copies_per_structure[mon_idx]
+        n_sa = copies_per_structure
+        monomer_val = jnp.log(jnp.sum(copies_per_structure * jnp.exp(log_structure_concentrations)))
+        diff = monomer_val - log_mon_conc[mon_idx]
+        # rmse = jnp.sqrt((diff)**2)
+        # return rmse
+        return jnp.abs(diff)
+    
+    def structure_loss_fn(struct_idx):
+                              
+        log_vcs = jnp.log(V) + log_structure_concentrations[struct_idx]
+        log_vca = jnp.repeat(jnp.log(V),n) + log_mon_conc
+        nsa_array = copies_per_structure[:,struct_idx] 
+        vcs_denom = jnp.sum(log_vca * nsa_array)              
+        lhs = log_vcs - vcs_denom
+                              
+        log_zs = log_zc_list[struct_idx] 
+        zs_denom = jnp.sum(log_zc_list, nsa_array)
+        rhs = log_zs - zs_denom 
+        diff = lhs - rhs
+        return jnp.abs(diff)                      
+                                 
+    
+    monomer_loss = vmap(monomer_loss_fn)(jnp.arange(n))
+    structure_loss = vmap(structure_loss_fn)(jnp.arange(n,s))
+    #total_loss = jnp.sum(monomer_loss) + jnp.sum(structure_loss)
+    return jnp.concatenate([monomer_loss, structure_loss]).sum()
+    return total_loss
+"""
+
+
+
+
+
+
+def loss_fn(log_structure_concentrations):
+    # Ensure the input is compatible with the expected shapes
+    log_structure_concentrations = jnp.asarray(log_structure_concentrations)
+
+    def monomer_loss_fn(log_structure_conc):
+        # Since n=1, directly use the first element
+        exp_log_structure_conc = jnp.exp(log_structure_conc)
+        monomer_val = jnp.log(jnp.sum(copies_per_structure * exp_log_structure_conc))
+        diff = monomer_val - log_mon_conc[0]  # Directly accessing the first element as n=1
+        return jnp.abs(diff)
+
+    def compute_vcs_denom(log_vca, nsa_array):
+        return jnp.sum(log_vca * nsa_array)
+
+    
+
+    def structure_loss_fn(idx):
+        
+        log_vca = jnp.repeat(jnp.log(V),n) + log_mon_conc
+        vcs_denom_vectorized = vmap(compute_vcs_denom, in_axes=(None, 1), out_axes=0)(log_vca, copies_per_structure)
+        vcs_denom = vcs_denom_vectorized[idx]
+        log_vcs = jnp.log(V) + log_structure_concentrations[idx]
+        lhs = log_vcs - vcs_denom
+
+        log_zs = log_zc_list[idx]
+        zs_denom = jnp.sum(log_zc_list * copies_per_structure[:, idx])  
+        rhs = log_zs - zs_denom
+
+        diff = lhs - rhs
+        return jnp.abs(diff)
+
+
+    # Use vmap to apply the function across elements
+    monomer_loss = monomer_loss_fn(log_structure_concentrations[:n])  # Only the first n elements for monomers
+    structure_loss = vmap(structure_loss_fn, in_axes=0, out_axes=0)(jnp.arange(n,s))
+    
+    total_loss = monomer_loss + jnp.sum(structure_loss)
+    return total_loss
+
+"""
+    def structure_loss_fn(struct_idx):
+        log_vcs = jnp.log(V) + log_structure_concentrations[struct_idx]
+
+        def get_vcs_denom(mon_idx):
+            n_sa = copies_per_structure[struct_idx]
+            log_vca = jnp.log(V) + log_structure_concentrations[mon_idx]
+            return n_sa * log_vca
+        vcs_denom = vmap(get_vcs_denom)(jnp.arange(n)).sum()
+
+        log_zs = log_zc_list[struct_idx]
+        def get_z_denom(mon_idx):
+            n_sa = copies_per_structure[struct_idx]
+            log_zalpha = log_zc_list[mon_idx]
+            return n_sa * log_zalpha
+        z_denom = vmap(get_z_denom)(jnp.arange(n)).sum()
+
+        diff = log_vcs - vcs_denom - log_zs + z_denom
+        # rmse = jnp.sqrt(diff**2)
+        # return rmse
+        return jnp.abs(diff)
+"""
+
+
+
+def optimize_loss(initial_guess):
+    # solver = BFGS(fun=lambda x: loss_fn(x), maxiter=5000)
+    solver = GradientDescent(fun=lambda x: loss_fn(x), maxiter=5000)
+
+    result = solver.run(initial_guess)
+    optimized_structure_concentrations = result.params
+    return optimized_structure_concentrations
+
+
+# Assuming the last two configurations might be slightly more probable
+uniform_conc = conc[0]/len(Zc_all)
+
+#initial_guess = jnp.repeat(uniform_conc,8)
+initial_guess = jnp.repeat(jnp.log(uniform_conc),8)
+# Initial guess for structure concentrations
+#uniform_conc = conc[0]/len(Zc_all)
+uniform_conc = 0.01
+
+#pdb.set_trace()
+optimized_concentrations = optimize_loss(initial_guess)
+#pdb.set_trace()
+print("Optimized Concentrations:", optimized_concentrations)
