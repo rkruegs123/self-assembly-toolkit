@@ -444,179 +444,105 @@ def safe_log(x, eps=1e-10):
     return jnp.log(jnp.clip(x, a_min=eps, a_max=None))
 
 
-def ofer(log_zc_list, conc):
+def ofer_v3(log_zc_list, log_mon_conc):
     
-    log_mon_conc = safe_log(conc[0:n])
-    log_mon_zc = log_zc_list[0:n]
+    def ofer_v2_batched(log_zc_list_sub):
+        log_mon_zc = log_zc_list[0:n]
+
+        def loss_fn(log_structure_concentrations):
+
+            def monomer_loss_fn(monomer_idx):
+
+                monomer_val =  jnp.log(jnp.dot(copies_per_structure[monomer_idx],
+                                               jnp.exp(log_structure_concentrations)))
+                diff = monomer_val - log_mon_conc[monomer_idx]
+
+                return jnp.abs(diff)
+
+            def structure_loss_fn(struct_idx):
+                log_vcs = jnp.log(V) + log_structure_concentrations[struct_idx]
+
+                def get_vcs_denom(mon_idx):
+                    n_sa = copies_per_structure[mon_idx][struct_idx]
+                    log_vca = jnp.log(V) + log_structure_concentrations[mon_idx]
+
+                    return n_sa * log_vca
+
+                vcs_denom = vmap(get_vcs_denom)(jnp.arange(n)).sum()
+
+                log_zs = log_zc_list[struct_idx]
+
+                def get_z_denom(mon_idx):
+                    n_sa = copies_per_structure[mon_idx][struct_idx]
+                    log_zalpha = log_zc_list[mon_idx]
+                    return n_sa * log_zalpha
+
+                z_denom = vmap(get_z_denom)(jnp.arange(n)).sum()
+
+                diff = log_vcs - vcs_denom - log_zs + z_denom
+                return jnp.abs(diff)
+
+            monomer_loss = vmap(monomer_loss_fn)(jnp.arange(n))
+            structure_loss = vmap(structure_loss_fn)(jnp.arange(n, s)) 
+            total_loss =  structure_loss.sum() +  monomer_loss.sum()
+
+            return total_loss  
+
+            monomer_loss = vmap(monomer_loss_fn)(jnp.arange(n))
+            structure_loss = vmap(structure_loss_fn)(jnp.arange(n, s)) 
+            total_loss =  structure_loss.sum() +  monomer_loss.sum()
+            return total_loss 
     
-    def loss_fn(log_structure_concentrations):
+    def create_subsets(log_list, include_indices):
+        """
+        Creates subsets of log_zc_list that always include the first 2 elements and the last one.
+        Additional indices to be included can be specified by `include_indices`.
 
-        def monomer_loss_fn(monomer_idx):
+        Args:
+        - log_zc_list: The original log_zc_list array.
+        - include_indices: Indices of additional elements to include in the subset.
 
-            monomer_val =  jnp.log(jnp.dot(copies_per_structure[monomer_idx],
-                                           jnp.exp(log_structure_concentrations)))
-            diff = monomer_val - log_mon_conc[monomer_idx]
-
-            return jnp.abs(diff)
-
-        def structure_loss_fn(struct_idx):
-            log_vcs = jnp.log(V) + log_structure_concentrations[struct_idx]
-
-            def get_vcs_denom(mon_idx):
-                n_sa = copies_per_structure[mon_idx][struct_idx]
-                log_vca = jnp.log(V) + log_structure_concentrations[mon_idx]
-
-                return n_sa * log_vca
-
-            vcs_denom = vmap(get_vcs_denom)(jnp.arange(n)).sum()
-
-            log_zs = log_zc_list[struct_idx]
-
-            def get_z_denom(mon_idx):
-                n_sa = copies_per_structure[mon_idx][struct_idx]
-                log_zalpha = log_zc_list[mon_idx]
-                return n_sa * log_zalpha
-
-            z_denom = vmap(get_z_denom)(jnp.arange(n)).sum()
-
-            diff = log_vcs - vcs_denom - log_zs + z_denom
-            return jnp.abs(diff)
-        
-        monomer_loss = vmap(monomer_loss_fn)(jnp.arange(n))
-        structure_loss = vmap(structure_loss_fn)(jnp.arange(n, s)) 
-        total_loss =  structure_loss.sum() +  monomer_loss.sum()
-        return total_loss 
+        Returns:
+        A list of subsets of log_zc_list.
+        """
+        index_list = log_list[2:include_indices]
+        batched_log_zc_list = jnp.concatenate([log_list[0],log_list[1], index_list, log_list[-1] ])
     
-    init_struct_concentrations = jnp.full(s, safe_log(conc.sum() / s))
+        return log_zc_list[base_indices]
     
-    # Define optimizer
-    optimizer = optax.adam(1e-2)  # Consider tuning the learning rate
-    grad_fn = jit(value_and_grad(loss_fn))
+        """  
+    def calculate_batch_indices(log_zc_list, batch_size):
+        # Assuming log_zc_list is a list and you want its length
+        log_list_length = len(log_zc_list)  # If log_zc_list is an array, use log_zc_list.shape[0]
 
-    # Optimization loop
-    losses = []
-    params = init_struct_concentrations
-    opt_state = optimizer.init(params)
-    for i in range(1000):  # You might want to adjust the number of iterations
-        loss, grads = grad_fn(params)
-        losses.append(loss)
-        updates, opt_state = optimizer.update(grads, opt_state)
-        params = optax.apply_updates(params, updates)
-        
-    return params, losses
+        # Now log_list_length should be a scalar, so subtracting 3 should not cause issues
+        num_elements = log_list_length - 3
 
-                              
-def optimize_loss(z_rot, z_mon, initial_mon_concentrations, lr=1e-3, num_iters=100):
-    
-    def calculate_target_yield(z_rot, z_mon, mon_concentrations):
-        target = 0.6
-        Z = run(z_rot, z_mon)
-        log_structure_concentrations = ofer(Z, mon_concentrations)[0]
-        print("conce:", log_structure_concentrations )
-        exp_structure_concentrations = jnp.exp(log_structure_concentrations)
-        print("exp:", exp_structure_concentrations )
-        yield_of_target = jnp.abs(exp_structure_concentrations[-1] / exp_structure_concentrations.sum())
-        return jnp.abs(target - yield_of_target)
+        # Calculate the number of full batches
+        num_full_batches = num_elements // batch_size
+        remainder = num_elements % batch_size
+        """
 
-    optimizer = optax.adam(lr)
-    params = initial_mon_concentrations
-    opt_state = optimizer.init(params)
+        # Generate batch indices
+    def calculate_batch_indices(total_size, batch_size):
+        return [(i, min(i + batch_size, total_size)) for i in range(0, total_size, batch_size)]
 
-    # The grad_fn should be defined outside the loop.
-    grad_fn = jit(value_and_grad(calculate_target_yield))
+        """ 
+        if remainder:
+            last_batch_start = batch_size * num_full_batches
+            batch_indices.append((last_batch_start, last_batch_start + remainder))
 
-    gradients = []
+        return batch_indices
+        """ 
 
-    # Now, the loop doesn't reinitialize the optimizer and params every iteration.
-    optimizer = optax.adam(lr)
-    params = initial_mon_concentrations
-    opt_state = optimizer.init(params)
-    for i in tqdm(range(num_iters)):
-
-        pdb.set_trace()
-        value, grads = grad_fn(z_rot, z_mon, params)
-        gradients.append(grads)
-        updates, opt_state = optimizer.update(grads, opt_state)
-        params = optax.apply_updates(params, updates)
-
-        # Debug prints
-        print(f"Iteration {i+1}:")
-        print(f"Gradients: {grads}")
-        print(f"Parameters before update: {params}")
-        params = optax.apply_updates(params, updates)
-        print(f"Parameters after update: {params}")
-        print("one loop completed")
-
-    final_yield_diff = calculate_target_yield(z_rot, z_mon, params)
-
-    return params, final_yield_diff, gradientss
-
-
-
-def ofer_v2(log_zc_list, log_mon_conc):
-    
-    # log_mon_conc = safe_log(conc[0:n])
-    log_mon_zc = log_zc_list[0:n]
-    
-    def loss_fn(log_structure_concentrations):
-
-        def monomer_loss_fn(monomer_idx):
-
-            monomer_val =  jnp.log(jnp.dot(copies_per_structure[monomer_idx],
-                                           jnp.exp(log_structure_concentrations)))
-            diff = monomer_val - log_mon_conc[monomer_idx]
-
-            return jnp.abs(diff)
-
-        def structure_loss_fn(struct_idx):
-            log_vcs = jnp.log(V) + log_structure_concentrations[struct_idx]
-
-            def get_vcs_denom(mon_idx):
-                n_sa = copies_per_structure[mon_idx][struct_idx]
-                log_vca = jnp.log(V) + log_structure_concentrations[mon_idx]
-
-                return n_sa * log_vca
-
-            vcs_denom = vmap(get_vcs_denom)(jnp.arange(n)).sum()
-
-            log_zs = log_zc_list[struct_idx]
-
-            def get_z_denom(mon_idx):
-                n_sa = copies_per_structure[mon_idx][struct_idx]
-                log_zalpha = log_zc_list[mon_idx]
-                return n_sa * log_zalpha
-
-            z_denom = vmap(get_z_denom)(jnp.arange(n)).sum()
-
-            diff = log_vcs - vcs_denom - log_zs + z_denom
-            return jnp.abs(diff)
-        
-        monomer_loss = vmap(monomer_loss_fn)(jnp.arange(n))
-        structure_loss = vmap(structure_loss_fn)(jnp.arange(n, s)) 
-        total_loss =  structure_loss.sum() +  monomer_loss.sum()
-        return total_loss 
-
-    mon_conc = jnp.exp(log_mon_conc)
-    init_struct_concentrations = jnp.full(s, safe_log(mon_conc.sum() / s))
-    
     # Define optimizer
     optimizer = optax.adam(1e-2)  # Consider tuning the learning rate
     params = init_struct_concentrations
     opt_state = optimizer.init(params)
-    grad_fn = jit(value_and_grad(loss_fn))
-
+    grad_fn = jit(value_and_grad(ofer_v2_batched))
+    
     n_iters = 50000
-
-    """
-    for _ in range(n_iters):
-        loss, grads = grad_fn(params)
-        updates, opt_state = optimizer.update(grads, opt_state)
-        params = optax.apply_updates(params, updates)
-    return params[-1]
-    """
         
-    
-
     @jit
     def scan_fn(opt_info, idx):
         struct_concs, opt_state = opt_info
@@ -624,10 +550,45 @@ def ofer_v2(log_zc_list, log_mon_conc):
         updates, opt_state = optimizer.update(grads, opt_state)
         struct_concs = optax.apply_updates(struct_concs, updates)
 
-        return (struct_concs, opt_state), (loss, struct_concs)
+        return (struct_concs, opt_state) #, (loss, struct_concs)
+    
+    mon_conc = jnp.exp(log_mon_conc)
+    
+    def batched_optimization(batch_index):
+        subset = create_subsets(log_zc_list, batch_index)
+        s_subset = subset.shape[0]
+        init_struct_concentrations = jnp.full(s_subset, safe_log(mon_conc.sum() / s_subset))
+        fin_opt_info = lax.scan(scan_fn, (params, opt_state), jnp.arange(n_iters)) 
+        fin_log_concs, fin_opt_state = fin_opt_info
+        return fin_log_concs[0],fin_log_concs[1], fin_log_concs[-1], fin_log_concs[2:batch_index]
+    
+ 
+    total_size = len(log_zc_list)  # Assuming log_zc_list is your list of items to process
+    batch_size = 4  # Example batch size
+    batch_sizes = calculate_batch_indices(total_size, batch_size)
+    
+    monA_log_concs = []
+    monB_log_concs = []
+    target_log_concs = []
+    other_log_concs =[]
+    
+    for start_idx, end_idx in batch_sizes:
+        monA_log_conc, monB_log_conc, target_log_conc, other_log_conc  = batched_optimization(log_zc_list[start_idx:end_idx])
+        monA_log_concs.append(monA_log_conc)
+        monB_log_concs.append(monB_log_conc)
+        target_log_concs.append(target_log_conc)
+        other_log_concs.append(other_log_conc)
+
+    #monA_log_concs, monB_log_concs, target_log_concs, other_log_concs = vmap(batched_optimization)(batch_sizes)
+    monA_log = sum(monA_log_concs)/len(monA_log_concs)
+    monB_log = sum(monB_log_concs)/len(monB_log_concs)
+    target_log = sum(target_log_concs)/len(target_log_concs)
+    
+    fin_log = jnp.array(concatenate(monA_log, monB_log, other_log_concs, target_log))
+    
 
     
-    fin_opt_info, (losses, iter_concs) = lax.scan(scan_fn, (params, opt_state), jnp.arange(n_iters))
+    #fin_opt_info, (losses, iter_concs) = lax.scan(scan_fn, (params, opt_state), jnp.arange(n_iters))
     fin_log_concs, fin_opt_state = fin_opt_info
     
     def log_normalize(log_vals):
@@ -645,12 +606,9 @@ def ofer_v2(log_zc_list, log_mon_conc):
     yield_target = log_normalize(fin_log_concs)[-1]
 
     # return fin_log_concs[-1], (losses, iter_concs)
-    return  yield_target, (losses, iter_concs)
-
-
+    return  yield_target #, (losses, iter_concs)
     
     
-
 
     
 
@@ -671,7 +629,7 @@ if __name__ == "__main__":
     initial_log_mon_concs = safe_log(jnp.array([conc_A, conc_B]))
 
     init_struct_concentrations = jnp.full(s, safe_log( m_conc .sum() / s))
-    my_fn = lambda some_log_concs: ofer_v2(Z_log, some_log_concs)
+    my_fn = lambda some_log_concs: ofer_v3(Z_log, some_log_concs)
     our_grad_fn = value_and_grad(my_fn, has_aux=True)
     our_grad_fn = jit(our_grad_fn)
     

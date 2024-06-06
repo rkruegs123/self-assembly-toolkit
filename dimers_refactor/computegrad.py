@@ -1,4 +1,3 @@
-import pdb
 from tqdm import tqdm
 import argparse
 import numpy as onp
@@ -17,10 +16,10 @@ import optax
 
 import potentials
 from jax_transformations3d import jax_transformations3d as jts
-from utils import euler_scheme, convert_to_matrix, ref_ppos, ref_q0
+from utils import euler_scheme, convert_to_matrix, ref_ppos, setup_ref_q0
 
-from jax.config import config
-config.update("jax_enable_x64", True)
+#from jax.config import config
+#config.update("jax_enable_x64", True)
 
 
 
@@ -356,7 +355,7 @@ def Calculate_yield_can(Nb, Nr, pc_list):
     return jnp.dot(Y_list, pc_list)
 """
 
-def run(args, seed=0):
+def run(args, noise_terms, seed=0):
     """
     monomer_energy is a function of q=(x,y,z,alpha,beta,gamma) with the parameters "euler_scheme" and "ppos"
     dimer_energy is a function of q=(x,y,z,alpha,beta,gamma) with the parameters "euler_scheme" and "ppos"
@@ -378,7 +377,7 @@ def run(args, seed=0):
     conc = args['conc']
     Ntot = jnp.sum(jnp.array(args['num_monomer']))
     V = Ntot / conc
-
+    ref_q0 = setup_ref_q0(noise_terms)
     split1, split2 = random.split(key)
     Zc_dimer = calculate_zc(
         split1, dimer_energy, ref_q0, ref_ppos,
@@ -399,13 +398,14 @@ def run(args, seed=0):
     # Note: what about this one?
     pc_list = Calculate_pc_list(args['num_monomer'], Zc_monomer, Zc_dimer, exact=True)
     Y_dimer = Calculate_yield_can(Nblue, Nred, pc_list)
-    return Y_dimer, None
+    return Y_dimer
     
 
     # Note: this one doesn't work
     # pc_list = Calculate_pc_list(args['num_monomer'], Zc_monomer, Zc_dimer, exact=True)
     # Y_dimer = Calculate_yield_can(Nblue, Nred, pc_list)
     # return Y_dimer, pc_list
+    
     
 
 def get_argparse():
@@ -447,22 +447,27 @@ if __name__ == "__main__":
 
 
 
-    d0 = 8.3
-    target_yield = 0.4
+
 
     def yield_fn(d0, args, seed):
         args['morse_d0'] = d0
-        yi, _ = run(args, seed)
-        return yi
+        #args['morse_d0_r'] = dr
+        #args['morse_d0_g'] = dg
+        #args['morse_d0_b'] = db
+        
+        vmap_run = vmap(run, in_axes=(None, 0, None))
+        noise_terms = jnp.array([1e-15, 1e-15,1e-14, 1e-14])
+        yi_values = vmap_run(args, noise_terms, seed)
+        #nans_replaced = jnp.where(jnp.isnan(yi_values), 0.0, yi_values)
+        #non_zero_values = nans_replaced[nans_replaced != 0]
+        sampled_yi = jnp.nanmean(yi_values)
+        return sampled_yi
 
 
     def loss_fn(params, args, target_yield, seed):
         d0 = params['d0']
         yi = yield_fn(d0, args, seed)
         return (yi-target_yield)**2, yi
-
-
-    params = {'d0': d0}
 
     grad_yield = jit(jacrev(loss_fn, has_aux=True))
 
@@ -510,7 +515,7 @@ if __name__ == "__main__":
     """
     
 
-    d0 = 8.3
+    d0 = 10.0
     target_yield = 0.4
 
 
@@ -520,9 +525,14 @@ if __name__ == "__main__":
     params = {'d0': d0}
     opt_state = optimizer.init(params)
 
-    yield_path = "yield_smooth.txt"
-    grad_path = "grad_smooth.txt"
-    d0_path = "d0_smooth.txt"
+    yield_path = "yield.txt"
+    grad_path = "grads.txt"
+    d0_path = "d0s.txt"
+    
+    open(yield_path, 'w').close()
+    open(grad_path, 'w').close()
+    open(d0_path, 'w').close()
+
 
     for i in tqdm(range(num_iters)):
         print(f"Iteration {i}:")

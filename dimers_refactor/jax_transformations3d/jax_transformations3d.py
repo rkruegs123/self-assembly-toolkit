@@ -1109,6 +1109,8 @@ def quaternion_apply(q, v, index_start=0):
     raise AssertionError('Should be impossible to get here.')
 
   return apply_fn(q, v)
+
+
   
   #if(len(q.shape) == 1):
   #  apply_fn = vmap(qapply,in_axes=(None,0))

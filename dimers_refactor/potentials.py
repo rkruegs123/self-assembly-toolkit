@@ -35,3 +35,4 @@ def repulsive(r, rmin, rmax, A, alpha):
     # return jnp.where(r >= rmax, 0.0, (A/(alpha*rmax)) * (rmax-r)**alpha)
     return jnp.where(r < rmax, (A/(alpha*rmax)) * base**alpha, 0.0)
 
+

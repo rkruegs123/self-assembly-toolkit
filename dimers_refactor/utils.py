@@ -39,9 +39,17 @@ ref_ppos2 = jts.matrix_apply(jts.reflection_matrix(jnp.array([0, 0, 0], dtype=jn
 )
 ref_ppos = jnp.array([ref_ppos1, ref_ppos2])
 
+def setup_ref_q0(noise):
+    separation = 2.0
+    ref_q0 = jnp.array([-separation/2.0, noise, 0, 0, 0, 0,
+                    separation/2.0, 0, 0, 0, 0, 0], dtype=jnp.float64)
+    return ref_q0
+
+"""
 separation = 2.
-noise = 1e-15
-# noise = 1e-16
+# noise = 1e-15
+noise = 1e-16
 ref_q0 = jnp.array([-separation/2.0, noise, 0, 0, 0, 0,
                     separation/2.0, 0, 0, 0, 0, 0], dtype=jnp.float64)
-
+                    
+"""

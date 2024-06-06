@@ -7,17 +7,48 @@ import csv
 import matplotlib.pyplot as plt
 import time
 from random import randint
+from jax import lax
+from functools import partial
 
 from jax import random
 from jax import jit, grad, vmap, value_and_grad, hessian, jacfwd, jacrev
 import jax.numpy as jnp
+import optax
 
 import potentials
 from jax_transformations3d import jax_transformations3d as jts
-from utils import euler_scheme, convert_to_matrix, ref_ppos, ref_q0
+from utils import euler_scheme, convert_to_matrix, ref_ppos, setup_ref_q0
 
 from jax.config import config
 config.update("jax_enable_x64", True)
+
+
+
+@partial(jit, static_argnums=(1,))
+def safe_mask(mask, fn, operand, placeholder=0):
+  masked = jnp.where(mask, operand, 0)
+  return jnp.where(mask, fn(masked), placeholder)
+
+def distance(dR):
+  dr = jnp.sum(dR ** 2, axis=-1)
+  return safe_mask(dr > 0, jnp.sqrt, dr)
+
+
+# dist_fn = jnp.linalg.norm
+dist_fn = distance
+
+
+
+some_big_number = 100
+factorial_table = jnp.array([osp.special.factorial(x) for x in range(some_big_number)])
+comb_table = onp.zeros((some_big_number, some_big_number))
+for i in range(some_big_number):
+    for j in range(some_big_number):
+        if i >= j:
+            comb_table[i, j] = osp.special.comb(i, j)
+comb_table = jnp.array(comb_table)
+
+
 
 
 def get_energy_fns(args):
@@ -37,14 +68,21 @@ def get_energy_fns(args):
 
     morse_rcut = 8. / args['morse_a'] + args['morse_r0']
     def cluster_energy(q, ppos):
-        # convert the building block coordinates to a tranformation
-        # matrix
+        # convert the building block coordinates to a tranformation matrix
+
+        # get_trans_matrix_elt = lambda i: convert_to_matrix(q[i*6:i*6+6])
+        # Mat = vmap(get_trans_matrix_elt)(jnp.arange(Nbb))
+
         Mat = []
         for i in range(Nbb):
             qi = i*6
             Mat.append(convert_to_matrix(q[qi:qi+6]))
 
         # apply building block matrix to spheres positions
+
+        # get_transf_pos = lambda i: jts.matrix_apply(Mat[i], ppos[i])
+        # real_ppos = vmap(get_transf_pos)(jnp.arange(Nbb))
+        
         real_ppos = []
         for i in range(Nbb):
             real_ppos.append(jts.matrix_apply(Mat[i], ppos[i]))
@@ -52,19 +90,28 @@ def get_energy_fns(args):
         tot_energy = jnp.float64(0)
 
         # Add repulsive interaction between spheres
-        for i in range(3):
-            pos1 = real_ppos[0][i]
-            for j in range(3):
-                pos2 = real_ppos[1][j]
-                r = jnp.linalg.norm(pos1-pos2)
-                tot_energy += potentials.repulsive(
-                    r, rmin=0, rmax=sphere_radius*2,
-                    A=args['rep_A'], alpha=args['rep_alpha'])
+        def j_repulsive_fn(j, pos1):
+            pos2 = real_ppos[1][j]
+            # r = jnp.linalg.norm(pos1-pos2)
+            r = dist_fn(pos1-pos2)
+            return potentials.repulsive(
+                r, rmin=0, rmax=sphere_radius*2,
+                A=args['rep_A'], alpha=args['rep_alpha'])
 
+        def i_repulsive_fn(i):
+            pos1 = real_ppos[0][i]
+            all_j_terms = vmap(j_repulsive_fn, (0, None))(jnp.arange(3), pos1)
+            return jnp.sum(all_j_terms)
+
+        repulsive_sm = jnp.sum(vmap(i_repulsive_fn)(jnp.arange(3)))
+        tot_energy += repulsive_sm        
+
+        
         # Add attraction b/w blue patches
         pos1 = real_ppos[0][3]
         pos2 = real_ppos[1][3]
-        r = jnp.linalg.norm(pos1-pos2)
+        # r = jnp.linalg.norm(pos1-pos2)
+        r = dist_fn(pos1-pos2)
         tot_energy += potentials.morse_x(
             r, rmin=0, rmax=morse_rcut,
             D0=args['morse_d0']*args['morse_d0_b'],
@@ -74,7 +121,8 @@ def get_energy_fns(args):
         # Add attraction b/w green patches
         pos1 = real_ppos[0][5]
         pos2 = real_ppos[1][4]
-        r = jnp.linalg.norm(pos1-pos2)
+        # r = jnp.linalg.norm(pos1-pos2)
+        r = dist_fn(pos1-pos2)
         tot_energy += potentials.morse_x(
             r, rmin=0, rmax=morse_rcut,
             D0=args['morse_d0']*args['morse_d0_g'],
@@ -84,7 +132,8 @@ def get_energy_fns(args):
         # Add attraction b/w red patches
         pos1 = real_ppos[0][4]
         pos2 = real_ppos[1][5]
-        r = jnp.linalg.norm(pos1-pos2)
+        # r = jnp.linalg.norm(pos1-pos2)
+        r = dist_fn(pos1-pos2)
         tot_energy += potentials.morse_x(
             r, rmin=0, rmax=morse_rcut,
             D0=args['morse_d0']*args['morse_d0_r'],
@@ -142,10 +191,10 @@ def setup_variable_transformation(energy_fn, q0, ppos):
     """
 
     Nbb = q0.shape[0] // 6 # Number of building blocks
-    assert(Nbb*6 == q0.shape[0])
-    assert(len(ppos.shape) == 3)
-    assert(ppos.shape[0] == Nbb)
-    assert(ppos.shape[2] == 3)
+    # assert(Nbb*6 == q0.shape[0])
+    # assert(len(ppos.shape) == 3)
+    # assert(ppos.shape[0] == Nbb)
+    # assert(ppos.shape[2] == 3)
 
     E = energy_fn(q0, ppos)
     G = grad(energy_fn)(q0, ppos)
@@ -153,7 +202,7 @@ def setup_variable_transformation(energy_fn, q0, ppos):
 
     evals, evecs = jnp.linalg.eigh(H)
 
-    print("\nEval", evals)
+    # print("\nEval", evals)
 
     zeromode_thresh = 1e-8
     num_zero_modes = jnp.sum(jnp.where(evals < zeromode_thresh, 1, 0))
@@ -163,7 +212,7 @@ def setup_variable_transformation(energy_fn, q0, ppos):
     else:
         zvib = jnp.prod(jnp.sqrt(2.*jnp.pi/(jnp.abs(evals[6:])+1e-12)))
 
-    print("Zvib", zvib)
+    # print("Zvib", zvib)
 
     def ftilde(nu):
         return jnp.matmul(evecs.T[6:].T, nu[6:])
@@ -189,12 +238,12 @@ def setup_variable_transformation(energy_fn, q0, ppos):
 
 def standard_error(data):
     mean = jnp.mean(data, axis=0)
-    
+
     # Calculate the standard error using the formula: std(data) / sqrt(N)
     std_dev = jnp.std(data, axis=0)
     sqrt_n = jnp.sqrt(data.shape[0])
     std_error = std_dev / sqrt_n
-    
+
     return std_error
 
 
@@ -215,13 +264,13 @@ def calc_jmean(f, key, nrandom=100000):
 
     nu_fn = jit(lambda nu: jnp.abs(jnp.linalg.det(jacfwd(f)(nu, False))))
     Js = vmap(nu_fn)(nus)
-    #pdb.set_trace()
+    # pdb.set_trace()
     mean = jnp.mean(Js)
-    #error = osp.stats.sem(Js)
-    #error = osp.stats.sem(Js)
+    # error = osp.stats.sem(Js)
+    # error = osp.stats.sem(Js)
     error = standard_error(Js)
 
-    return mean ,error
+    return mean, error
 
 
 def calculate_zc(key, energy_fn, all_q0, all_ppos, sigma, kBT, V):
@@ -234,13 +283,49 @@ def calculate_zc(key, energy_fn, all_q0, all_ppos, sigma, kBT, V):
     E0 = energy_fn(all_q0, all_ppos)
     boltzmann_weight = jnp.exp(-E0/kBT)
 
-    print("E0", len(all_q0), E0)
-    print("zvib", len(all_q0), zvib)
-    print("Jtilde", len(all_q0), Jtilde)
+    # print("E0", len(all_q0), E0)
+    # print("zvib", len(all_q0), zvib)
+    # print("Jtilde", len(all_q0), Jtilde)
 
     return boltzmann_weight * V * (Jtilde/sigma) * zvib
+    # return boltzmann_weight * V * (Jtilde/sigma)
 
 
+
+N_mon_real = 9
+def Calculate_pc_list(N_mon, Zc_monomer, Zc_dimer, exact=False):
+    # nd_fact = jax_factorial(N_mon_real)
+
+    def Mc(Nd):
+        return comb_table[N_mon_real, Nd] * comb_table[N_mon_real, Nd] * factorial_table[Nd]
+
+    def Pc(Nd):
+        return Mc(Nd) * (Zc_dimer**Nd) * (Zc_monomer**(N_mon_real-Nd)) * (Zc_monomer**(N_mon_real-Nd))
+
+    pc_list = vmap(Pc)(jnp.arange(N_mon_real+1))
+    return pc_list / jnp.sum(pc_list)
+
+
+
+"""
+def Calculate_pc_list(N_mon, Zc_monomer, Zc_dimer, exact=False):
+    def Mc(Nd):
+        return osp.special.comb(Nb, Nd, exact=exact) \
+            * osp.special.comb(Nr, Nd, exact=exact) \
+            * osp.special.factorial(Nd, exact=exact)
+
+    def Pc(Nd):
+        return Mc(Nd) * (Zc_dimer**Nd) * (Zc_monomer**(Nb-Nd)) * (Zc_monomer**(Nr-Nd))
+
+    pc_list = jnp.array([Pc(Nd) for Nd in range(0, N_mon+1)])
+    pc_list = pc_list / jnp.sum(pc_list)
+
+    return pc_list
+"""
+
+
+# NOTE: the following code relaxes the assumption that Nb == Nr, but is not immediately jit-able. We could fix this if we want, but we don't care for now
+"""
 def Calculate_pc_list(Nb, Nr, Zc_monomer, Zc_dimer, exact=False):
     Nd_max = min(Nb, Nr)
     def Mc(Nd):
@@ -255,13 +340,23 @@ def Calculate_pc_list(Nb, Nr, Zc_monomer, Zc_dimer, exact=False):
     pc_list = pc_list / jnp.sum(pc_list)
 
     return pc_list
+"""
 
 
+def Calculate_yield_can(Nb_dummy, Nr_dummy, pc_list):
+    Nb = 9
+    Nr = 9
+
+    Y_list = vmap(lambda Nd: Nd / (Nb+Nr-Nd))(jnp.arange(N_mon_real+1))
+    return jnp.dot(Y_list, pc_list)
+
+"""
 def Calculate_yield_can(Nb, Nr, pc_list):
     Y_list = jnp.array([Nd / (Nb+Nr-Nd) for Nd in range(len(pc_list))])
     return jnp.dot(Y_list, pc_list)
+"""
 
-def run(args, seed=0):
+def run(args, noise_terms, seed=0):
     """
     monomer_energy is a function of q=(x,y,z,alpha,beta,gamma) with the parameters "euler_scheme" and "ppos"
     dimer_energy is a function of q=(x,y,z,alpha,beta,gamma) with the parameters "euler_scheme" and "ppos"
@@ -276,12 +371,14 @@ def run(args, seed=0):
 
     monomer_energy, dimer_energy = get_energy_fns(args)
 
+    # print( monomer_energy, dimer_energy)
+
     Nblue, Nred = args['num_monomer'], args['num_monomer']
 
     conc = args['conc']
     Ntot = jnp.sum(jnp.array(args['num_monomer']))
     V = Ntot / conc
-
+    ref_q0 = setup_ref_q0(noise_terms)
     split1, split2 = random.split(key)
     Zc_dimer = calculate_zc(
         split1, dimer_energy, ref_q0, ref_ppos,
@@ -291,10 +388,26 @@ def run(args, seed=0):
         ref_q0[:6], jnp.array([ref_ppos[0]]),
         sigma=1, kBT=1.0, V=V)
 
-    pc_list = Calculate_pc_list(Nblue, Nred, Zc_monomer, Zc_dimer, exact=True)
-    Y_dimer = Calculate_yield_can(Nblue, Nred, pc_list)
 
-    return Y_dimer, pc_list
+    # Note: this one works
+    # return Zc_dimer, None
+
+    # Note: maybe this will work
+    # pc_list = Calculate_pc_list(args['num_monomer'], Zc_monomer, Zc_dimer, exact=True)
+    # return jnp.mean(pc_list), None
+
+    # Note: what about this one?
+    pc_list = Calculate_pc_list(args['num_monomer'], Zc_monomer, Zc_dimer, exact=True)
+    Y_dimer = Calculate_yield_can(Nblue, Nred, pc_list)
+    return Y_dimer
+    
+
+    # Note: this one doesn't work
+    # pc_list = Calculate_pc_list(args['num_monomer'], Zc_monomer, Zc_dimer, exact=True)
+    # Y_dimer = Calculate_yield_can(Nblue, Nred, pc_list)
+    # return Y_dimer, pc_list
+    
+    
 
 def get_argparse():
     parser = argparse.ArgumentParser(description='Compute the yield of a simple dimer system')
@@ -331,61 +444,124 @@ if __name__ == "__main__":
 
     parser = get_argparse()
     args = vars(parser.parse_args())
-
-    d0= .4
-    target_yield = .4
-   # key = random.PRNGKey(6)
-    #key, subkey = random.split(key,2)
-#    seed = random.normal(key, shape=(1,))
- #   seed = float(random.normal(key))
-
-    def yield_fuc(d0, args, seed):
-        args['morse_d0'] = d0
-        yi, _ = run(args, seed)
-        return yi
-
-
-    def loss_fuc(d0, args, target_yield, seed):
-        yi= yield_fuc(d0, args, seed)
-        return (yi-target_yield)**2
-
-    grad_yield=  jacfwd(loss_fuc) 
     
- 
-    print("This is gradient of Yield:", grad_yield(d0, args, target_yield, seed = 9))
+    
 
 
 
 
 
 
+
+    def yield_fn(conc, args, seed):
+        #args['morse_d0'] = d0
+        args['conc'] = conc
+        #args['morse_d0_r'] = dr
+        #args['morse_d0_g'] = dg
+        #args['morse_d0_b'] = db
+        
+        vmap_run = vmap(run, in_axes=(None, 0, None))
+        noise_terms = jnp.array([-1e-14, 1e-14,-1e-15, 1e-15,-1e-16, 1e-16])
+        yi_values = vmap_run(args, noise_terms, seed)
+        sampled_yi = jnp.nanmean(yi_values)
+        return sampled_yi
+
+
+    def loss_fn(params, args, target_yield, seed):
+        # d0 = params['d0']
+        conc = params['conc']
+        yi = yield_fn(conc, args, seed)
+        return (yi-target_yield)**2, yi
+
+    grad_yield = jit(jacrev(loss_fn, has_aux=True))
+
+
+    # Test 1: Do a single forward calculation
     """
-    # all_eb = onp.arange(0, 13, 1)
-    all_eb = onp.arange(3, 13, 1)
+    first_eval_start = time.time()
+    grads, curr_yield = grad_yield(params, args, target_yield, seed=9)
+    first_eval_end = time.time()
+    print(f"First eval took: {first_eval_end - first_eval_start} seconds")
+
+    second_eval_start = time.time()
+    grads, curr_yield = grad_yield(params, args, target_yield, seed=9)
+    second_eval_end = time.time()
+    print(f"Second eval took: {second_eval_end - second_eval_start} seconds")
+
+
+    pdb.set_trace()
+    """
+
+
+    # Test 2: Do a range of forward calculations
+    """
+    d0s = onp.arange(3, 13, 0.1)
     all_yields = list()
+    all_grads = list()
+    for d0 in tqdm(d0s):
+        params = {'d0': d0}
+        grads, curr_yield = grad_yield(params, args, target_yield, seed=9)
+        all_yields.append(curr_yield)
+        all_grads.append(grads['d0'])
 
-    start = time.time()
-    for d0 in tqdm(all_eb):
-
-        args['morse_d0'] = d0
-        ys, pc = run(args)
-        all_yields.append(ys)
-
-        print(ys)
-        print(pc)
-    end = time.time()
-
-    print(f"Total execution: {end - start} seconds")
-
-    plt.plot(all_eb, all_yields)
-    plt.ylabel("Dimers Yield")
-    plt.xlabel(r"$E_b$")
-    plt.show()
-    plt.savefig("yield_plot.pdf")
-    """
     pdb.set_trace()
 
+    
+    plt.plot(d0s, all_yields)
+    plt.savefig("yields.png")
+    plt.clf()
 
+    plt.plot(d0s, all_grads)
+    plt.savefig("grads.png")
+    plt.clf()
+
+    pdb.set_trace()
+    """
+    
+
+    target_yield = 0.4
+    initial_conc_value = 0.001
+    log_conc_initial = jnp.log(initial_conc_value)
+    params = {'log_conc': log_conc_initial}
+    
+    num_iters = 400
+    learning_rate = 0.01
+    optimizer = optax.adam(learning_rate)
+    opt_state = optimizer.init(params)
+
+    yield_path = "yield.txt"
+    grad_path = "grads.txt"
+    conc_path = "concs.txt"
+    
+    open(yield_path, 'w').close()
+    open(grad_path, 'w').close()
+    open(conc_path, 'w').close()
+
+
+    for i in tqdm(range(num_iters)):
+        print(f"Iteration {i}:")
+        params_with_conc = {'conc': jnp.exp(params['log_conc'])}
+        grads, curr_yield = grad_yield(params_with_conc, args, target_yield, seed=9)
+        # grads = grads['d0']
+        # grads_numeric = grads.item()
+        curr_grad = grads['conc']
+        print(f"\t- grad: {float(curr_grad)}")
+        print(f"\t- current yield: {curr_yield}")
+
+        curr_log_conc = params['log_conc']
+        curr_conc = jnp.exp(curr_log_conc)  # get the actual conc value
+        print(f"\t- current conc: {float(curr_conc)}")
+
+        with open(yield_path, "a") as f:
+            f.write(f"{curr_yield}\n")
+        with open(grad_path, "a") as f:
+            f.write(f"{curr_grad}\n")
+        with open(conc_path, "a") as f:
+            f.write(f"{curr_conc}\n")
+
+        updates, opt_state = optimizer.update({'log_conc': curr_grad}, opt_state)
+        params = optax.apply_updates(params, updates)
+
+    pdb.set_trace()
 
     print("done")
-

@@ -57,7 +57,7 @@ small_value = 1e-12  # Small value to replace zeros to avoid nans
 
 # Setup soft-sphere repulsion between vertex centers
 ss_eps_table = onp.full((n_species, n_species), small_value)  
-ss_eps_table[vertex_species, vertex_species] = 1000.0  
+ss_eps_table[vertex_species, vertex_species] = 500.0  
 ss_eps_table = jnp.array(ss_eps_table)
 
 ss_sigma_table = onp.full((n_species, n_species), small_value)  
@@ -83,7 +83,7 @@ morse_eps_table = jnp.array(morse_eps_table)
 
 pair_morse_energy_fn = energy.morse_pair(
     displacement_fn,
-    sigma=0.0,
+    sigma=1.,
     epsilon=morse_eps_table,
     alpha= 1.8,
     species=n_species
@@ -253,9 +253,9 @@ def get_zrot(energy_fn, pos_flat, species, seed=0, nrandom=100000):
     key, *splits = random.split(key, nrandom + 1)
     nus = vmap(set_nu_random)(jnp.array(splits))
 
-    pdb.set_trace()
-    ex_jac = jacfwd(f)(nu)
-    pdb.set_trace()
+    #pdb.set_trace()
+    #ex_jac = jacfwd(f)(nu)
+    #pdb.set_trace()
     
     nu_fn = lambda nu: jnp.abs(jnp.linalg.det(jacfwd(f)(nu)))
 

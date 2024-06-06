@@ -4,6 +4,7 @@ import jax.numpy as jnp
 from jax import random
 import jax.lax as lax
 
+
 def _raiseValueError(msg):
   raise ValueError(msg)
 
@@ -1109,6 +1110,9 @@ def quaternion_apply(q, v, index_start=0):
     raise AssertionError('Should be impossible to get here.')
 
   return apply_fn(q, v)
+
+
+
   
   #if(len(q.shape) == 1):
   #  apply_fn = vmap(qapply,in_axes=(None,0))
@@ -1117,4 +1121,3 @@ def quaternion_apply(q, v, index_start=0):
   #else:
   #  raise ValueError('q must have shape (4,) or (m,4)')
   #return jnp.reshape(apply_fn(q, jnp.atleast_2d(v)),v.shape 
-

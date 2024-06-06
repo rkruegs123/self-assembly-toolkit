@@ -76,12 +76,23 @@ for comb in unique_combinations:
     elif len(comb) == 3:
         trimer_list.append(comb)
 
+def calculate_sigma_dimer(numeric_combination):
+    numeric_combination = list(numeric_combination)  # Convert to standard Python list
+    return 6 if numeric_combination[:3] == numeric_combination[3:][::-1]  else 3
+
 
 mon_pc_species = jnp.array([get_numeric_combination(combination_to_string(comb)) for comb in mon_list])
 dimer_pc_species = jnp.array([get_numeric_combination(combination_to_string(comb)) for comb in dimer_list])
 trimer_pc_species = jnp.array([get_numeric_combination(combination_to_string(comb)) for comb in trimer_list])
 
+mon_sigma = jnp.array([3] * len(mon_list))
+dimer_sigma = jnp.array([calculate_sigma_dimer(comb) for comb in dimer_pc_species])
+trimer_sigma= jnp.array([3] * len(trimer_list)) 
+
+
 #pdb.set_trace()
+
+
 
 #  dynamically count monomers and save results
 # Count monomers for each species type
@@ -101,6 +112,9 @@ with open('AB_species_test2.pkl', 'wb') as f:
         'mon_pc_species': mon_pc_species,
         'dimer_pc_species': dimer_pc_species,
         'trimer_pc_species': trimer_pc_species,
+        'mon_sigma': mon_sigma,
+        'dimer_sigma': dimer_sigma,
+        'trimer_sigma': trimer_sigma,
         'A_mon_counts': A_mon_counts,
         'A_dimer_counts': A_dimer_counts,
         'A_trimer_counts': A_trimer_counts,
@@ -114,7 +128,7 @@ with open('AB_species_test2.pkl', 'wb') as f:
 
 #pdb.set_trace()
 print(dimer_pc_species)
-
+print(dimer_sigma)
 print("Species combinations and counts saved successfully.")
 
 

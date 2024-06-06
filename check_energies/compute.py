@@ -3,6 +3,7 @@ import pdb
 from tqdm import tqdm
 import numpy as onp
 import csv
+import argparse
 import jax.numpy as jnp
 from jax_md import rigid_body, energy, util, space, dataclasses
 import optax
@@ -26,13 +27,14 @@ def load_species_combinations(filename):
         data = pickle.load(f)
     return data
 
-# Load the data
+
 data = load_species_combinations('AB_species_test.pkl')
 
-# species combinations for different configurations
 mon_pc_species = data['mon_pc_species']
 dimer_pc_species = data['dimer_pc_species']
 trimer_pc_species = data['trimer_pc_species']
+
+#species_list = jnp.concatenate([mon_pc_species, dimer_pc_species, trimer_pc_species]) 
 
 # mon count for each configuration 
 A_mon_counts = data['A_mon_counts']
@@ -43,11 +45,14 @@ B_mon_counts = data['B_mon_counts']
 B_dimer_counts = data['B_dimer_counts']
 B_trimer_counts = data['B_trimer_counts']
 
-#C_mon_counts = data['C_mon_counts']
-#C_dimer_counts = data['C_dimer_counts']
-#C_trimer_counts = data['C_trimer_counts']
 
-#pdb.set_trace()
+A_count = jnp.concatenate([A_mon_counts, A_trimer_counts, A_dimer_counts])#fixme
+B_count = jnp.concatenate([B_mon_counts, B_trimer_counts, B_dimer_counts])#fixme
+copies_per_structure = jnp.array([A_count, B_count])
+
+V = 1.
+n = copies_per_structure.shape[0]
+s = A_count.shape[0]
 
 
 """
@@ -58,7 +63,6 @@ Defining shape of monomer, dimer, trimer structures
 vertex_species = 0
 n_species = 7
 
-# Helper functions
 
 euler_scheme = "sxyz"
 
@@ -145,6 +149,18 @@ def get_positions2(q, ppos):
     return real_ppos 
 
 
+
+dimer_pos = get_positions(dimer_rb, dimer_shapes)
+trimer_pos = get_positions(trimer_rb, trimer_shapes) 
+
+"""
+Defining values for potentials between all species
+
+"""
+
+
+# Setup soft-sphere repulsion between table values
+
 """
 Defining values for potentials between all species
 
@@ -207,35 +223,6 @@ def pairwise_morse(ipos, jpos, i_species, j_species):
 dimer_pos = get_positions(dimer_rb, dimer_shapes)
 trimer_pos = get_positions(trimer_rb, trimer_shapes)    
 
-
-
-def energy_tot(q, pos, species):
-    ppos = get_positions(q, pos)
-    species = onp.repeat(species, 3) 
-
-    n_particles = len(ppos)
-    n_per_monomer = 9 
-    monomer = jnp.repeat(jnp.arange(n_particles // n_per_monomer), n_per_monomer)
-
-    morse_func = vmap(vmap(pairwise_morse, in_axes=(None, 0, None, 0)), in_axes=(0, None, 0, None))
-    rep_func = vmap(vmap(pairwise_repulsion, in_axes=(None, 0, None, 0)), in_axes=(0, None, 0, None))
-
-    morse_energy_matrix = morse_func(ppos, ppos, species, species)
-    rep_energy_matrix = rep_func(ppos, ppos, species, species)
-
-    inter_monomer_mask = monomer[:, None] != monomer[None, :]
-    mask = inter_monomer_mask & ~jnp.eye(n_particles, dtype=bool)
-
-    morse_energy_matrix = morse_energy_matrix * mask
-    rep_energy_matrix = rep_energy_matrix * mask
-
-    tot_energy = jnp.sum(jnp.triu(morse_energy_matrix)) + jnp.sum(jnp.triu(rep_energy_matrix))
-
-    return tot_energy
-
-
-#pdb.set_trace()
-
 def trimer_energy(q, pos, species):
     
     positions = get_positions(q, pos)
@@ -289,7 +276,6 @@ def dimer_energy(q, pos, species):
 
     return tot_energy 
 
-
   
 def add_variables(ma, mb):
     """
@@ -319,6 +305,7 @@ def add_variables_all(mas, mbs):
 
     return jnp.reshape(vmap(add_variables, in_axes=(0, 0))(
         mas_temp, mbs_temp), mas.shape)
+
 
 
 def hess(energy_fn, q, pos, species):
@@ -369,25 +356,21 @@ def get_zrot(energy_fn, q, pos, species, seed=0, nrandom=100000):
     
     return Jtilde
 
-def calculate_zc_mon(energy_fn, q, pos, species, kBT=1, V=1, seed=0, nrandom=100000):
+
+def calculate_zc_mon(kBT=1, V=1, seed=0, nrandom=30000):
 
     key = random.PRNGKey(seed)
-    Nbb = 1 #to be changed
-
-    evals, evecs = hess(energy_fn, q, pos, species)
 
 
     def set_nu_random(key):
         quat = jts.random_quaternion(None, key)
         angles = jnp.array(jts.euler_from_quaternion(quat, euler_scheme))
-        nu0 = jnp.full((2 * 6,), 0.) #Maybe Fixme
+        nu0 = jnp.full((1 * 6,), 0.) #Maybe Fixme
         return nu0.at[3:6].set(angles)
 
  
-    def ftilde(nu):
+    def f(nu):
         return nu
-    
-    f = ftilde
 
     key, *splits = random.split(key, nrandom + 1)
     nus = vmap(set_nu_random)(jnp.array(splits))
@@ -395,7 +378,7 @@ def calculate_zc_mon(energy_fn, q, pos, species, kBT=1, V=1, seed=0, nrandom=100
 
     nu_fn = lambda nu: jnp.abs(jnp.linalg.det(jacfwd(f)(nu)))
 
-    #Js = vmap(nu_fn)(nus)
+    Js = vmap(nu_fn)(nus)
 
 
     J = jnp.mean(Js)
@@ -403,20 +386,16 @@ def calculate_zc_mon(energy_fn, q, pos, species, kBT=1, V=1, seed=0, nrandom=100
     
     zvib = 1.
     boltzmann_weight = 1.
-    n_mon = pos.shape[0]
     sigma = 1
-
-    return boltzmann_weight * V 
     
+    return  boltzmann_weight * V * (Jtilde/sigma) * zvib
     
-    
-    return Jtilde
 
 
 def calculate_zc(energy_fn, q, pos, species, kBT=1, V=1, seed=0, nrandom=100000):
 
     zvib = get_zvib(energy_fn, q, pos, species)
-    Jtilde = get_zrot(energy_fn, q, pos, species, seed, nrandom)
+
     
     E0 = energy_fn(q, pos, species)
     boltzmann_weight = jnp.exp(-E0/kBT)
@@ -425,9 +404,7 @@ def calculate_zc(energy_fn, q, pos, species, kBT=1, V=1, seed=0, nrandom=100000)
     #print( sigma)
     sigma = 1.
 
-    return boltzmann_weight * V * (Jtilde/sigma) * zvib
-
-
+    return boltzmann_weight * V * (1/sigma) * zvib
 
 
 def calculate_zc_part(energy_fn, q, pos, species_chunk):
@@ -442,146 +419,181 @@ def process_part(energy_fn, q, pos, species, chunk_size=10):
         results.append(chunk_result)
     return jnp.concatenate(results, axis=0)
 
-# Apply chunk processing
-Zc_dimer = process_part(dimer_energy, dimer_rb, dimer_shapes, dimer_pc_species, chunk_size=10)
 
-#Zc_dimer =  vmap(calculate_zc, in_axes=(None, None, None, 0))(dimer_energy, dimer_rb, dimer_shapes, dimer_pc_species)
-Zc_trimer = process_part(trimer_energy, trimer_rb, trimer_shapes, trimer_pc_species, chunk_size=10)
-#Zc_trimer = vmap(calculate_zc, in_axes=(None, None, None, 0))(trimer_energy, trimer_rb, trimer_shapes, trimer_pc_species)
-#Zc_mon = vmap(calculate_zc_mon, in_axes=(None, None, None, 0))(energy_tot, mon_rb, mon_shape, mon_pc_species)
-Zc_mon = jnp.repeat(1.001,2)
-Zc_all= jnp.concatenate([Zc_mon, Zc_dimer, Zc_trimer])
-log_zc_list= jnp.log(Zc_all)
-#pdb.set_trace()
+def run( z_rot, z_mon, seed=0):
 
-A_count = jnp.concatenate([A_mon_counts, A_dimer_counts, A_trimer_counts])
-B_count = jnp.concatenate([B_mon_counts, B_dimer_counts, B_trimer_counts])
-#C_count = jnp.concatenate([C_mon_counts, C_dimer_counts, C_trimer_counts])
-copies_per_structure = jnp.array([A_count, B_count])
+    Zc_mon = jnp.repeat(z_mon, n)
+    Zc_dimer = process_part(dimer_energy, dimer_rb, dimer_shapes, dimer_pc_species, chunk_size=10)
+    Zc_trimer = process_part(trimer_energy, trimer_rb, trimer_shapes, trimer_pc_species, chunk_size=10)
 
-def write_to_text(data, filename):
-    with open(filename, 'w', newline='') as file:
-        for value in data:
-            file.write(f"{value}\n")
-
-write_to_text(log_zc_list, 'log_zc_list.txt')
-
-"""    
+                                                                              
     
-V = 1
-conc = jnp.array([0.1, 0.1, 0.1])
+    Zc_dimer = Zc_dimer *  z_rot[0]
+    Zc_dimer = Zc_trimer *  z_rot[1]
+    Zc_all= jnp.concatenate([Zc_mon, Zc_trimer, Zc_dimer]) #fixme
+    log_zc_list= jnp.log(Zc_all)
+    return log_zc_list
 
 
-####
+#V = 1.
+#n = copies_per_structure.shape[0]
+#s = A_count.shape[0]
 
-# Defined:
-# number of monomoers: n
-# number of structurs (including monomers): s
-# conc: (n,)
-# V: float
-# log_zc_list: (s,)
-# copies_per_structure: (n, s)
-
-# first n strcutrs are the monomers
-# last (n-s) structures are not the monomers
 
 
 def safe_log(x, eps=1e-10):
     return jnp.log(jnp.clip(x, a_min=eps, a_max=None))
 
-def safe_exp(x, clip_value=88.0):  # np.log(np.finfo(np.float32).max)
-    return jnp.exp(jnp.clip(x, a_min=None, a_max=clip_value))
 
-n = 2
-log_mon_conc = safe_log(conc[0:n])
-log_mon_zc = log_zc_list[0:n]
-s = Zc_all.shape[0]    
-
-def loss_fn(log_structure_concentrations):
-
-
-
-    def monomer_loss_fn(monomer_idx):
-        
-        #monomer_val = safe_log(jnp.dot(copies_per_structure, safe_exp(jnp.nan_to_num(log_structure_concentrations))))
-        monomer_val =  jnp.log(jnp.dot(copies_per_structure, jnp.exp(log_structure_concentrations)))
-        diff = monomer_val - log_mon_conc[monomer_idx]
-        if jnp.isnan(monomer_val).any():
-            print("NaN detected in monomer_val")
-        # rmse = jnp.sqrt((diff)**2)
-        # return rmse
-        return jnp.abs(diff)
-
-    def structure_loss_fn(struct_idx):
-        log_vcs = safe_log(V) + log_structure_concentrations[struct_idx]
-
-        def get_vcs_denom(mon_idx):
-            n_sa = copies_per_structure[mon_idx][struct_idx]
-            #log_vca = safe_log(V) + log_structure_concentrations[mon_idx]
-            log_vca = jnp.log(V) + log_mon_conc[mon_idx]
-            return n_sa * log_vca
-        
-        vcs_denom = vmap(get_vcs_denom)(jnp.arange(n)).sum()
-
-        log_zs = log_zc_list[struct_idx]
-        
-        def get_z_denom(mon_idx):
-            n_sa = copies_per_structure[mon_idx][struct_idx]
-            log_zalpha = log_zc_list[mon_idx]
-            return n_sa * log_zalpha
-        z_denom = vmap(get_z_denom)(jnp.arange(n)).sum()
-
-        diff = log_vcs - vcs_denom - log_zs + z_denom
-        return jnp.abs(diff)
-
-    monomer_loss = vmap(monomer_loss_fn)(jnp.arange(n))
-    structure_loss = vmap(structure_loss_fn)(jnp.arange(n, s))
-    total_loss = structure_loss.sum() + monomer_loss.sum()
-    #total_loss = jnp.nan_to_num(total_loss)
-
-    # return total_loss
+def ofer(log_zc_list, conc):
     
-    # total_loss = jnp.sum(monomer_loss) #+ jnp.sum(structure_loss)
-    # total_loss = structure_loss.sum() + monomer_loss.sum()
-    # return total_loss
+    log_mon_conc = safe_log(conc[0:n])
+    log_mon_zc = log_zc_list[0:n]
+    
+    def loss_fn(log_structure_concentrations):
 
-    #return jnp.concatenate([monomer_loss, structure_loss]).sum()
-    return total_loss
+        def monomer_loss_fn(monomer_idx):
 
-#jit_loss_fn = jit(loss_fn)
+            monomer_val =  jnp.log(jnp.dot(copies_per_structure[monomer_idx],
+                                           jnp.exp(log_structure_concentrations)))
+            diff = monomer_val - log_mon_conc[monomer_idx]
+
+            return jnp.abs(diff)
+
+        def structure_loss_fn(struct_idx):
+            log_vcs = jnp.log(V) + log_structure_concentrations[struct_idx]
+
+            def get_vcs_denom(mon_idx):
+                n_sa = copies_per_structure[mon_idx][struct_idx]
+                log_vca = jnp.log(V) + log_structure_concentrations[mon_idx]
+
+                return n_sa * log_vca
+
+            vcs_denom = vmap(get_vcs_denom)(jnp.arange(n)).sum()
+
+            log_zs = log_zc_list[struct_idx]
+
+            def get_z_denom(mon_idx):
+                n_sa = copies_per_structure[mon_idx][struct_idx]
+                log_zalpha = log_zc_list[mon_idx]
+                return n_sa * log_zalpha
+
+            z_denom = vmap(get_z_denom)(jnp.arange(n)).sum()
+
+            diff = log_vcs - vcs_denom - log_zs + z_denom
+            return jnp.abs(diff)
+        
+        monomer_loss = vmap(monomer_loss_fn)(jnp.arange(n))
+        structure_loss = vmap(structure_loss_fn)(jnp.arange(n, s)) 
+        total_loss =  structure_loss.sum() +  monomer_loss.sum()
+        return total_loss 
+    
+    init_struct_concentrations = jnp.full(s, safe_log(conc.sum() / s))
+    
+    # Define optimizer
+    optimizer = optax.adam(1e-2)  # Consider tuning the learning rate
+    grad_fn = jit(value_and_grad(loss_fn))
+
+    # Optimization loop
+    losses = []
+    params = init_struct_concentrations
+    opt_state = optimizer.init(params)
+    for i in range(1000):  # You might want to adjust the number of iterations
+        loss, grads = grad_fn(params)
+        losses.append(loss)
+        updates, opt_state = optimizer.update(grads, opt_state)
+        params = optax.apply_updates(params, updates)
+        
+    return params, losses
+
+                              
+def optimize_loss(z_rot, z_mon, initial_mon_concentrations, lr=1e-3, num_iters=100):
+    
+    def calculate_target_yield(z_rot, z_mon, mon_concentrations):
+        target = 0.6
+        Z = run(z_rot, z_mon)
+        log_structure_concentrations = ofer(Z, mon_concentrations)[0]
+        print("conce:", log_structure_concentrations )
+        exp_structure_concentrations = jnp.exp(log_structure_concentrations)
+        print("exp:", exp_structure_concentrations )
+        yield_of_target = jnp.abs(exp_structure_concentrations[-1] / exp_structure_concentrations.sum())
+        return jnp.abs(target - yield_of_target)
+
+    optimizer = optax.adam(lr)
+    params = initial_mon_concentrations
+    opt_state = optimizer.init(params)
+
+    # The grad_fn should be defined outside the loop.
+    grad_fn = value_and_grad(calculate_target_yield)
+
+    gradients = []
+
+    # Now, the loop doesn't reinitialize the optimizer and params every iteration.
+    for i in tqdm(range(num_iters)):
+        optimizer = optax.adam(lr)
+        params = initial_mon_concentrations
+        opt_state = optimizer.init(params)
+
+        grad_fn = jit(value_and_grad(calculate_target_yield))
+        value, grads = grad_fn(z_rot, z_mon, params)
+        gradients.append(grads)
+        updates, opt_state = optimizer.update(grads, opt_state)
+        params = optax.apply_updates(params, updates)
+
+        # Debug prints
+        print(f"Iteration {i+1}:")
+        print(f"Gradients: {grads}")
+        print(f"Parameters before update: {params}")
+        params = optax.apply_updates(params, updates)
+        print(f"Parameters after update: {params}")
+        print("one loop completed")
+
+    final_yield_diff = calculate_target_yield(z_rot, z_mon, params)
+
+    return params, final_yield_diff, gradientss
+
+    """
+    for i in tqdm(range(num_iters)):
+
+        value, grads = grad_fn(params)
+        gradients.append(grads)  #
+        
+
+        updates, opt_state = optimizer.update(grads, opt_state, params)
+        params = optax.apply_updates(params, updates)
+   
+
+    for i in tqdm(range(num_iters)):
+        try:
+            value, grads = grad_fn(z_rot, z_mon, params)
+            gradients.append(grads)  # 
+            updates, opt_state = optimizer.update(grads, opt_state,z_rot, z_mon, params)
+            params = optax.apply_updates(params, updates)
+        except Exception as e:
+            print("An error occurred during optimization:", e)
+            break
+
+    final_yield_diff = calculate_target_yield(z_rot, z_mon, params)
+
+    return params, final_yield_diff, gradients
+  
+      """
 
 
-def optimize_loss( initial_guess):
-    solver = GradientDescent(fun=lambda x: loss_fn(x), maxiter=50000)
-    #solver = ScipyMinimize(fun=lambda x: loss_fn(x), maxiter=50000)
+if __name__ == "__main__":
+    
+    z_rot_dimer = get_zrot(dimer_energy, dimer_rb, dimer_shapes, dimer_pc_species[1])
+    z_rot_trimer = get_zrot(trimer_energy, trimer_rb, trimer_shapes, trimer_pc_species[1])
+    z_mon = calculate_zc_mon(kBT=1)                 
+    z_rot = jnp.array([z_rot_dimer,z_rot_trimer])
+                       
+    conc_A = 0.001
+    conc_B = 0.002
+    m_conc = jnp.array([conc_A, conc_B])
 
-    result = solver.run(initial_guess)
-    optimized_structure_concentrations = result.params
-    return optimized_structure_concentrations
+    optimized_params, opt_yield, gradients = optimize_loss(z_rot, z_mon, m_conc)
 
-
-
-# Assuming the last two configurations might be slightly more probable
-uniform_conc = conc[0]/len(Zc_all)
-initial_guess = jnp.repeat(uniform_conc,s)
-# Initial guess for structure concentrations
-uniform_conc = conc[0]/len(Zc_all)
-
-
-#pdb.set_trace()
-optimized_concentrations = optimize_loss(initial_guess)
-#pdb.set_trace()
-print("Optimized Concentrations:", optimized_concentrations)
-
-                     
-                     
+    print("Optimized Parameters:", optimized_params)
+    print("Optimized Yield:", opt_yield_diff)
 
 
-#print(energy_tot( trimer_rb, trimer_shapes, trimer_species))  
-#print(get_zrot(energy_tot, trimer_rb, trimer_shapes, trimer_species)) 
-#print(energy_tot( dimer_rb, dimer_shapes, dimer_species))  
-#print(calculate_zc(energy_tot, dimer_rb, dimer_shapes, dimer_species)) 
-#print(calculate_zc(energy_tot, trimer_rb, trimer_shapes,trier_species)) 
-
-"""                     
-                     

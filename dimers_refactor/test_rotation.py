@@ -46,7 +46,7 @@ comb_table = jnp.array(comb_table)
 
 
 
-def get_energy_fns(args):
+def get_energy_fns(q, ppos):
 
     Nbb = 2
 
@@ -59,7 +59,7 @@ def get_energy_fns(args):
     patch_radius = 0.2 * sphere_radius
 
 
-    morse_rcut = 8. / args['morse_a'] + args['morse_r0']
+    morse_rcut = 8. / 5.
     def cluster_energy(q, ppos):
      
         Mat = []
@@ -81,7 +81,7 @@ def get_energy_fns(args):
             r = dist_fn(pos1-pos2)
             return potentials.repulsive(
                 r, rmin=0, rmax=sphere_radius*2,
-                A=args['rep_A'], alpha=args['rep_alpha'])
+                A=500, alpha=2.5)
 
         def i_repulsive_fn(i):
             pos1 = real_ppos[0][i]
@@ -89,9 +89,106 @@ def get_energy_fns(args):
             return jnp.sum(all_j_terms)
 
         repulsive_sm = jnp.sum(vmap(i_repulsive_fn)(jnp.arange(3)))
-        tot_energy += repulsive_sm        
-
+        tot_energy += repulsive_sm
         
+        def j_repulsive_fn0(j, pos1):
+            pos2 = real_ppos[1][j]
+            # r = jnp.linalg.norm(pos1-pos2)
+            r = dist_fn(pos1-pos2)
+            return potentials.repulsive(
+                r, rmin=0, rmax=1e-12 ,
+                A=1e-12 , alpha=2.5)
+
+        def i_repulsive_fn0(i):
+            pos1 = real_ppos[0][i]
+            all_j_terms = vmap(j_repulsive_fn0, (0, None))(jnp.arange(6), pos1)
+            return jnp.sum(all_j_terms)
+        
+        repulsive0 = jnp.sum(vmap(i_repulsive_fn0)(jnp.array([3, 4, 5])))
+        tot_energy += repulsive0
+         
+        def i_repulsive_fn_0(i):
+            pos1 = real_ppos[0][i]
+            all_j_terms = vmap(j_repulsive_fn0, (0, None))(jnp.array([3, 4, 5]), pos1)
+            return jnp.sum(all_j_terms)   
+        
+        repulsive_0 = jnp.sum(vmap(i_repulsive_fn_0)(jnp.arange(3)))
+        tot_energy += repulsive_0                                                  
+        
+
+        def j_morse_fn0(j, pos1):
+            pos2 = real_ppos[1][j]
+            # r = jnp.linalg.norm(pos1-pos2)
+            r = dist_fn(pos1-pos2)
+            return potentials.morse_x(
+            r, rmin=0, rmax=morse_rcut,
+            D0=0.,
+            alpha=0.0, r0=0.,
+            ron=morse_rcut/2.)
+
+        def i_morse_fn0(i):
+            pos1 = real_ppos[0][i]
+            all_j_terms = vmap(j_morse_fn0, (0, None))(jnp.array([3, 4, 5]), pos1)
+            return jnp.sum(all_j_terms)
+        
+        def i_morse_fn0(i):
+            pos1 = real_ppos[0][i]
+            all_j_terms = vmap(j_morse_fn0, (0, None))(jnp.array([3, 4, 5]), pos1)
+            return jnp.sum(all_j_terms)
+        
+        morse_sm0 = jnp.sum(vmap(i_morse_fn0)(jnp.arange(3)))
+        tot_energy += morse_sm0 
+        
+        def j_morse_fn3(j):
+            pos1 = real_ppos[0][3]
+            pos2 = real_ppos[1][j]
+            # r = jnp.linalg.norm(pos1-pos2)
+            r = dist_fn(pos1-pos2)
+            return potentials.morse_x(
+            r, rmin=0, rmax=morse_rcut,
+            D0=0.,
+            alpha=1e-12, r0=0.,
+            ron=morse_rcut/2.)
+        
+        def j_morse_fn4(j):
+            pos1 = real_ppos[0][4]
+            pos2 = real_ppos[1][j]
+            # r = jnp.linalg.norm(pos1-pos2)
+            r = dist_fn(pos1-pos2)
+            return potentials.morse_x(
+            r, rmin=0, rmax=morse_rcut,
+            D0=0.,
+            alpha=1e-12, r0=0.,
+            ron=morse_rcut/2.)
+        
+        def j_morse_fn5(j):
+            pos1 = real_ppos[0][5]
+            pos2 = real_ppos[1][j]
+            # r = jnp.linalg.norm(pos1-pos2)
+            r = dist_fn(pos1-pos2)
+            return potentials.morse_x(
+            r, rmin=0, rmax=morse_rcut,
+            D0=0.,
+            alpha=1e-12, r0=0.,
+            ron=morse_rcut/2.)
+        
+        for j in jnp.array([0,1,2,4,5]):
+            morse3 = jnp.float64(0)               
+            morse3 += j_morse_fn3(j)
+        tot_energy += morse3                   
+                           
+        for j in jnp.array([0,1,2,3,5]):
+            morse4 = jnp.float64(0)               
+            morse4 += j_morse_fn4(j)
+        tot_energy += morse4
+                           
+        for j in jnp.array([0,1,2,3,4]):
+            morse5 = jnp.float64(0)               
+            morse5 += j_morse_fn5(j)
+        tot_energy += morse5
+   
+
+              
         # Add attraction b/w blue patches
         pos1 = real_ppos[0][3]
         pos2 = real_ppos[1][3]
@@ -99,8 +196,8 @@ def get_energy_fns(args):
         r = dist_fn(pos1-pos2)
         tot_energy += potentials.morse_x(
             r, rmin=0, rmax=morse_rcut,
-            D0=args['morse_d0']*args['morse_d0_b'],
-            alpha=args['morse_a'], r0=args['morse_r0'],
+            D0=10.,
+            alpha=5., r0=0.,
             ron=morse_rcut/2.)
 
         # Add attraction b/w green patches
@@ -110,8 +207,8 @@ def get_energy_fns(args):
         r = dist_fn(pos1-pos2)
         tot_energy += potentials.morse_x(
             r, rmin=0, rmax=morse_rcut,
-            D0=args['morse_d0']*args['morse_d0_g'],
-            alpha=args['morse_a'], r0=args['morse_r0'],
+            D0=10.,
+            alpha=5., r0=0.,
             ron=morse_rcut/2.)
 
         # Add attraction b/w red patches
@@ -121,8 +218,8 @@ def get_energy_fns(args):
         r = dist_fn(pos1-pos2)
         tot_energy += potentials.morse_x(
             r, rmin=0, rmax=morse_rcut,
-            D0=args['morse_d0']*args['morse_d0_r'],
-            alpha=args['morse_a'], r0=args['morse_r0'],
+            D0=10.,
+            alpha=5., r0=0.,
             ron=morse_rcut/2.)
 
         # Note: no repulsion between identical patches, as in Agnese's code. May affect simulations.
@@ -258,7 +355,7 @@ def calc_jmean(f, key, nrandom=100000):
     return mean, error
 
 
-def calculate_zc(key, energy_fn, all_q0, all_ppos, sigma, kBT, V):
+def calculate_zc(key, energy_fn, all_q0, all_ppos, sigma, kBT):
 
     f, num_zero_modes, zvib = setup_variable_transformation(energy_fn, all_q0, all_ppos)
 
@@ -272,48 +369,15 @@ def calculate_zc(key, energy_fn, all_q0, all_ppos, sigma, kBT, V):
     return Jtilde
 
 
-
-N_mon_real = 9
-def Calculate_pc_list(N_mon, Zc_monomer, Zc_dimer, exact=False):
-    # nd_fact = jax_factorial(N_mon_real)
-
-    def Mc(Nd):
-        return comb_table[N_mon_real, Nd] * comb_table[N_mon_real, Nd] * factorial_table[Nd]
-
-    def Pc(Nd):
-        return Mc(Nd) * (Zc_dimer**Nd) * (Zc_monomer**(N_mon_real-Nd)) * (Zc_monomer**(N_mon_real-Nd))
-
-    pc_list = vmap(Pc)(jnp.arange(N_mon_real+1))
-    return pc_list / jnp.sum(pc_list)
-
-
-
-
-
-def Calculate_yield_can(Nb_dummy, Nr_dummy, pc_list):
-    Nb = 9
-    Nr = 9
-
-    Y_list = vmap(lambda Nd: Nd / (Nb+Nr-Nd))(jnp.arange(N_mon_real+1))
-    return jnp.dot(Y_list, pc_list)
-
-
 def run(args, noise_terms, seed=0):
 
     key = random.PRNGKey(seed)
-
-    monomer_energy, dimer_energy = get_energy_fns(args)
-
-    Nblue, Nred = args['num_monomer'], args['num_monomer']
-
-    conc = args['conc']
-    Ntot = jnp.sum(jnp.array(args['num_monomer']))
-    V = Ntot / conc
     ref_q0 = setup_ref_q0(noise_terms)
-    split1, split2 = random.split(key)
+    monomer_energy, dimer_energy = get_energy_fns(ref_q0, ref_ppos)
+    
     Zc_dimer = calculate_zc(
-        split1, dimer_energy, ref_q0, ref_ppos,
-        sigma=1, kBT=1.0, V=V)
+        key, dimer_energy, ref_q0, ref_ppos,
+        sigma=1, kBT=1.0)
 
     return Zc_dimer
 
@@ -355,15 +419,20 @@ def main():
     parser = get_argparse()
     args = vars(parser.parse_args())  
 
-  
     noise_terms = 1e-15  
     seed = 0 
 
-   
     JTilde = run(args, noise_terms, seed)
 
+    ref_q0 = setup_ref_q0(noise_terms)
+    _, cluster_energy_fn = get_energy_fns(ref_q0, ref_ppos)
+
+    # Call cluster_energy_fn with appropriate arguments
+    # Assuming that ref_q0 and ref_ppos are the correct arguments for this function
+    cluster_energy_value = cluster_energy_fn(ref_q0, ref_ppos)
 
     print("JTilde:", JTilde)
+    print("Cluster Energy:", cluster_energy_value)
 
 if __name__ == "__main__":
     main()

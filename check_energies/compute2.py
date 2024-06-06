@@ -28,14 +28,11 @@ def load_species_combinations(filename):
     return data
 
 
-data = load_species_combinations('AB_species_test2.pkl')
-
+data = load_species_combinations('AB_species_test.pkl')
 
 mon_pc_species = data['mon_pc_species']
 dimer_pc_species = data['dimer_pc_species']
 trimer_pc_species = data['trimer_pc_species']
-
-pdb.set_trace()
 
 #species_list = jnp.concatenate([mon_pc_species, dimer_pc_species, trimer_pc_species]) 
 
@@ -190,14 +187,13 @@ rep_alpha_table = jnp.array(rep_alpha_table)
 default_weak_eps = small_value
 morse_eps_table = onp.full((n_species, n_species), default_weak_eps)
 default_strong_eps = 10.0
-morse_eps_table[onp.array([2, 3, 4, 5]), onp.array([3, 2, 5, 4])] = default_strong_eps
+morse_eps_table[onp.array([1, 2, 3]), onp.array([1, 2, 3])] = default_strong_eps
 morse_eps_table = jnp.array(morse_eps_table)
 
-
-morse_strong_alpha = 1.0
-morse_weak_alpha = 5 
-morse_alpha_table = onp.full((n_species, n_species),5)
-morse_alpha_table[onp.array([2, 3, 4, 5]), onp.array([3, 2, 5, 4])] = morse_weak_alpha
+morse_weak_alpha = 1e-12 
+morse_alpha_table = onp.full((n_species, n_species), morse_weak_alpha)
+morse_strong_alpha = 5.0
+morse_alpha_table[onp.array([2, 3, 4, 5]), onp.array([3, 2, 5, 4])] = morse_strong_alpha
 morse_alpha_table = jnp.array(morse_alpha_table)
 
 
@@ -620,7 +616,7 @@ def ofer_v2(log_zc_list, log_mon_conc):
     return params[-1]
     """
         
-    
+
 
     @jit
     def scan_fn(opt_info, idx):
@@ -631,26 +627,15 @@ def ofer_v2(log_zc_list, log_mon_conc):
 
         return (struct_concs, opt_state), (loss, struct_concs)
 
-    
     fin_opt_info, (losses, iter_concs) = lax.scan(scan_fn, (params, opt_state), jnp.arange(n_iters))
     fin_log_concs, fin_opt_state = fin_opt_info
-    
-    def log_normalize(log_vals):
-        # Step 1: Find the maximum log-value
-        M = jnp.max(log_vals)
-        # Step 2 & 3: Compute log-sum-exp
-        log_sum_exp = M + jnp.log(jnp.sum(jnp.exp(log_vals - M)))
-        # Step 4: Normalize
-        normalized_log_vals = log_vals - log_sum_exp
-        return normalized_log_vals
 
-    #fin_concs = jnp.sum(jnp.exp(fin_log_concs))
-    #yields = fin_concs / fin_concs.sum()
+    fin_concs = jnp.exp(fin_log_concs)
+    yields = fin_log_concs - fin_concs.sum()
     #log_yields = jnp.log(yields)
-    yield_target = log_normalize(fin_log_concs)[-1]
 
     # return fin_log_concs[-1], (losses, iter_concs)
-    return  - yield_target, (losses, iter_concs)
+    return -log_yields[-1], (losses, iter_concs)
 
 
     
@@ -686,13 +671,35 @@ if __name__ == "__main__":
     params = initial_log_mon_concs
     opt_state = optimizer.init(params)
 
-    n_outer_iters = 10
+    n_outer_iters = 10000
     for _ in tqdm(range(n_outer_iters)):
         (val, (losses, iter_concs)), grads = our_grad_fn(params)
         print(f"Yield: {val}")
         print(f"Params: {params}")
         print(f"Converged to: {losses[-1]}")
         updates, opt_state = optimizer.update(grads, opt_state)
-        params = optax.apply_updates(params, updates) 
+        params = optax.apply_updates(params, updates)
+    
+    
+    pdb.set_trace()
+
+
+
+
+    
+    
+    z_rot_dimer = get_zrot(dimer_energy, dimer_rb, dimer_shapes, dimer_pc_species[1])
+    z_rot_trimer = get_zrot(trimer_energy, trimer_rb, trimer_shapes, trimer_pc_species[1])
+    z_mon = calculate_zc_mon(kBT=1)                 
+    z_rot = jnp.array([z_rot_dimer,z_rot_trimer ])
+                       
+    conc_A = 0.001
+    conc_B = 0.002
+    m_conc = jnp.array([conc_A, conc_B])
+
+    optimized_params, opt_yield, gradients = optimize_loss(z_rot, z_mon, m_conc)
+
+    print("Optimized Parameters:", optimized_params)
+    print("Optimized Yield:", opt_yield_diff)
 
 
