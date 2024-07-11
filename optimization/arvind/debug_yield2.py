@@ -90,7 +90,7 @@ def ofer(concs):
             gradient_norm = jnp.linalg.norm(grads)
             if gradient_norm < gradient_norm_threshold:
                 break
-            updates, opt_state = opt_update(grads, opt_state)
+            updates, opt_update = opt_update(grads, opt_state)
             struc_concs_guess = optax.apply_updates(struc_concs_guess, updates)
         else:
             continue  # Only executed if the inner loop did NOT break
