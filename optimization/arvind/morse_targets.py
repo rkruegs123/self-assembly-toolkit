@@ -3,7 +3,7 @@ import pickle
 import time
 import jax.numpy as jnp
 import optax
-from jax import random, vmap, hessian, jacfwd, jit, value_and_grad, grad
+from jax import random, vmap, hessian, jacfwd, jit, value_and_grad, grad, lax
 from tqdm import tqdm
 from jax_md import space
 import potentials
@@ -11,16 +11,21 @@ import utils
 from jax_transformations3d import jax_transformations3d as jts
 from jaxopt import implicit_diff, GradientDescent
 import pdb
+import itertools
 from jax.config import config
 config.update("jax_debug_nans", True)
 config.update("jax_enable_x64", True)
+SEED = 42
+key = random.PRNGKey(SEED)
 
 # Targets
 targets = [
-    {"structure": [3, 0, 4, 2, 0, 1], "desired_yield": 0.1},
-    {"structure": [2, 0, 1, 2, 0, 1], "desired_yield": 0.1},
-    {"structure": [2, 0, 1, 5, 0, 6], "desired_yield": 0.2}
+    {"structure": [1, 0, 2, 3, 0, 4, 5, 0, 6], "desired_yield": 0.3},
+    #{"structure": [2, 0, 1, 2, 0, 1], "desired_yield": 0.1},
+   # {"structure": [2, 0, 1, 5, 0, 6], "desired_yield": 0.2}
 ]
+target_shapes = [t["structure"] for t in targets]
+
 
 #Set to True if oprimizing over strenghts of specific patch pairs
 use_custom_pairs = False
@@ -32,7 +37,7 @@ def load_species_combinations(filename):
         data = pickle.load(f)
     return data
 
-data = load_species_combinations('ABC_species.pkl')
+data = load_species_combinations('species_combinations.pkl')
 
 mon_species = data['mon_pc_species']
 dim_species = data['dimer_pc_species']
@@ -71,7 +76,7 @@ euler_scheme = "sxyz"
 
 
 # Constants
-V = 1.0
+V = 1250.0
 kT = 1.0
 n = 3  # number of monomers
 
@@ -91,7 +96,7 @@ n_species = n_patches + 1 #plus the common vertex specie 0
 
 n_morse_vals = n_patches * (n_patches - 1)//2 + n_patches #all possible pair permulations plus same patch attraction (i,i)
 patchy_vals = jnp.full(n_morse_vals, 4.) #FIXME for optimization over specific attraction strengths 
-concA, concB, concC = 0.1, 0.1, 0.1
+concA, concB, concC = 0.15, 0.15, 0.15
 concs = jnp.array([concA, concB, concC])
 init_params = jnp.concatenate([patchy_vals, concs])
 
@@ -107,6 +112,8 @@ shape = jnp.array([
     [a, b*jnp.cos(jnp.pi/6.), -b*jnp.sin(jnp.pi/6.)],  # second patch
     [a, -b*jnp.cos(jnp.pi/6.), -b*jnp.sin(jnp.pi/6.)]  # third patch
 ])
+
+#def make_shape(
 
 mon_shape = jnp.array([shape])
 dimer_shape = jnp.array([shape, shape])
@@ -178,72 +185,32 @@ def pairwise_repulsion(ipos, jpos, i_species, j_species):
 inner_rep = vmap(pairwise_repulsion, in_axes=(None, 0, None, 0))
 rep_func = vmap(inner_rep, in_axes=(0, None, 0, None))
 
-@jit
-def dimer_energy(q, pos, species, opt_params):
-    positions = utils.get_positions(q, pos)
-    pos1 = positions[:9]
-    pos2 = positions[9:]
-    species1 = jnp.repeat(species[:3], 3)
-    species2 = jnp.repeat(species[3:], 3)
-    tot_energy = jnp.sum(morse_func(pos1, pos2, species1, species2, opt_params))
-    tot_energy += jnp.sum(rep_func(pos1, pos2, species1, species2))
-    return tot_energy
 
-@jit
-def trimer_energy(q, pos, species, opt_params):
-    positions = utils.get_positions(q, pos)
-    pos1 = positions[:9]
-    pos2 = positions[9:18]
-    pos3 = positions[18:]
-    species1 = jnp.repeat(species[:3], 3)
-    species2 = jnp.repeat(species[3:6], 3)
-    species3 = jnp.repeat(species[6:], 3)
-    tot_energy = jnp.sum(morse_func(pos1, pos2, species1, species2, opt_params))
-    tot_energy += jnp.sum(morse_func(pos1, pos3, species1, species3, opt_params))
-    tot_energy += jnp.sum(morse_func(pos2, pos3, species2, species3, opt_params))
-    tot_energy += jnp.sum(rep_func(pos1, pos2, species1, species2))
-    tot_energy += jnp.sum(rep_func(pos1, pos3, species1, species3))
-    tot_energy += jnp.sum(rep_func(pos2, pos3, species2, species3))
-    return tot_energy
-
-"""
-# FIXME: do static argnums on n to test
-# FIXME: test that this is correct
-@jit
-def nmer_energy(q, pos, species, opt_params, n):
-    positions = utils.get_positions(q, pos)
-    get_ith_pos = lambda i: positions[i*9:i*9+9]
-    all_pos = vmap(get_ith_pos)(jnp.arange(n))
-    get_ith_species = lambda i: jnp.repeat(species[i*3:i*3+3], 3)
-    all_species = vmap(get_ith_species)(jnp.arange(n))
-    
-    # FIXME: try to do n choose 2 instead of n^2 work
-    def pairwise_energy(i, j):
-        energy = morse_func(all_pos[i], all_pos[j], all_species[i], all_species[j], opt_params).sum()
-        return jnp.where(i < j, energy, 0.0)
-    all_pairwise_energies = vmap(vmap(pairwise_energy, (None, 0)), (0, None))(jnp.arange(n), jnp.arange(n))
-    return all_pairwise_energies.sum()
-    
-import itertools # FIXME: put at the top
 def get_nmer_energy_fn(n):
-    pairs = jnp.array(onp.array(itertools.combinations(onp.arange(n), 2))).T
-    
-    def nmer_energy_fn(q, pos, species, opt_params, n):
-        positions = utils.get_positions(q, pos)
-        get_ith_pos = lambda i: positions[i*9:i*9+9]
-        all_pos = vmap(get_ith_pos)(jnp.arange(n))
-        get_ith_species = lambda i: jnp.repeat(species[i*3:i*3+3], 3)
-        all_species = vmap(get_ith_species)(jnp.arange(n))
+    pairs = jnp.array(onp.array(list(itertools.combinations(onp.arange(n), 2))))
 
-        # FIXME: try to do n choose 2 instead of n^2 work
-        def pairwise_energy(i, j):
-            energy = morse_func(all_pos[i], all_pos[j], all_species[i], all_species[j], opt_params).sum()
-            return energy
-        all_pairwise_energies = vmap(vmap(pairwise_energy, (None, 0)), (0, None))(pairs[0], pairs[1])
+    def nmer_energy_fn(q, pos, species, opt_params):
+        positions = utils.get_positions(q, pos)
+        # Precompute the slices for positions and species
+        pos_slices = [(i*9, (i+1)*9) for i in range(n)]
+        species_slices = [(i*3, (i+1)*3) for i in range(n)]
+
+        all_pos = jnp.stack([positions[start:end] for start, end in pos_slices])
+        all_species = jnp.stack([jnp.repeat(species[start:end], 3) for start, end in species_slices])
+
+        def pairwise_energy(pair):
+            i, j = pair
+            morse_energy = morse_func(all_pos[i], all_pos[j], all_species[i], all_species[j], opt_params).sum()
+            rep_energy = rep_func(all_pos[i], all_pos[j], all_species[i], all_species[j]).sum()
+            return morse_energy + rep_energy
+
+        all_pairwise_energies = vmap(pairwise_energy)(pairs)
         return all_pairwise_energies.sum()
+
     return nmer_energy_fn
-"""   
-    
+
+dimer_energy = jit(get_nmer_energy_fn(2))
+trimer_energy = jit(get_nmer_energy_fn(3))
 
 def hess(energy_fn, q, pos, species, opt_params):
     H = hessian(energy_fn)(q, pos, species, opt_params)
@@ -344,6 +311,7 @@ B_count = jnp.concatenate([B_mon_counts, B_dim_counts, B_trim_counts])
 C_count = jnp.concatenate([C_mon_counts, C_dim_counts, C_trim_counts])
 nper_structure = jnp.array([A_count, B_count, C_count])
 
+
 def loss_fn(log_concs_struc, log_z_list, opt_params):
     m_conc = jnp.array([opt_params[-3], opt_params[-2], opt_params[-1]])
     tot_conc = jnp.sum(m_conc)
@@ -427,15 +395,23 @@ def ofer_grad_fn(opt_params):
     return jnp.sum(losses), losses
 
 def project(param):
-    return jnp.clip(param, a_min=1e-4)
+    conc_min, conc_max = 0.0001, 0.2
+    concs = jnp.clip(param[-3:], a_min=conc_min, a_max=conc_max)
+    total_conc = jnp.sum(concs)
+    if total_conc > 0.5:
+        concs = 0.5 * (concs / total_conc)
+    param = param.at[-3:].set(concs)
+    return param
 
 our_grad_fn = jit(value_and_grad(ofer_grad_fn, has_aux=True))
 outer_optimizer = optax.adam(1e-2)
 params = init_params
 opt_state = outer_optimizer.init(params)
 
-n_outer_iters = 400
+n_outer_iters = 150
 outer_losses = []
+
+
 
 if use_custom_pairs and custom_pairs is not None:
     param_names = [f"Eps({i},{j})" for i, j in custom_pairs]
@@ -446,7 +422,8 @@ else:
 param_names += ["concA", "concB", "concC"]
 
 with open("morse_log.txt", "w") as log_file:
-    log_file.write("Iteration\t" + "\t".join([f"Target_Yield{i+1}" for i in range(len(targets))]) + "\t" + "\t".join(param_names) + "\n")
+    log_file.write("Iteration\t" + "\t".join([f"Target_Yield_{target_shapes[i]}" for i in range(len(targets))]) + "\t" + "\t".join(param_names) + "\n")
+
     
     for i in tqdm(range(n_outer_iters)):
         (loss_val, losses), grads = our_grad_fn(params)
@@ -465,8 +442,17 @@ with open("morse_log.txt", "w") as log_file:
         print(f"Concentrations: {params[-3], params[-2], params[-1]}")
         print(f"Gradients: {grads}")
 
-pdb.set_trace()
 final_params = params
 final_target_yields = ofer(final_params, jnp.array(inx_targets), jnp.array(desired_yields))
-print(f"Final Optimized Parameter (monomer concentration): {final_params}")
+
+final_params_dict = {name: final_params[idx] for idx, name in enumerate(param_names)}
+        
+        
+print(f"Final Optimized Parameters:")
+for name, value in final_params_dict.items():
+    print(f"{name}: {value}")
+
 print(f"Final Target Yields: {final_target_yields}")
+
+pdb.set_trace()
+
