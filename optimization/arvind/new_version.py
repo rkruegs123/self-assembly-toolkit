@@ -3,14 +3,16 @@ import pickle
 import time
 import jax.numpy as jnp
 import optax
-from jax import random, vmap, hessian, jacfwd, jit, value_and_grad, grad, lax
+from jax import random, vmap, hessian, jacfwd, jit, value_and_grad, grad, lax, checkpoint
 from tqdm import tqdm
 from jax_md import space
 import potentials
 import utils
 from jax_transformations3d import jax_transformations3d as jts
 from jaxopt import implicit_diff, GradientDescent
+from checkpoint import checkpoint_scan
 import pdb
+import functools
 import itertools
 from jax.config import config
 config.update("jax_debug_nans", True)
@@ -20,13 +22,13 @@ key = random.PRNGKey(SEED)
 
 
 targets = [
-    {"structure": [1, 0, 2, 3, 0, 4, 5, 0, 6, 7, 0, 8], "desired_yield": 0.5},
+    {"structure": [1, 0, 2, 3, 0, 4, 5, 0, 6, 7, 0, 8, 9, 0, 10], "desired_yield": 0.5},
 ]
 
 target_shapes = [t["structure"] for t in targets]
 
 use_custom_pairs = True
-custom_pairs = [(2, 3), (4, 5), (6, 7)]
+custom_pairs = [(2, 3), (4, 5), (6, 7), (8, 9)]
 
 def load_species_combinations(filename):
     with open(filename, 'rb') as f:
@@ -39,15 +41,17 @@ species1 = data['1_pc_species']
 species2 = data['2_pc_species']
 species3 = data['3_pc_species']
 species4 = data['4_pc_species']
+species5 = data['5_pc_species']
 
 n_1 = species1.shape[0]
 n_2 = species2.shape[0]
 n_3 = species3.shape[0]
 n_4 = species4.shape[0]
+n_5 = species5.shape[0]
 
-tot_num_structures = n_1 + n_2 + n_3 + n_4 
+tot_num_structures = n_1 + n_2 + n_3 + n_4 + n_5
 
-num_monomers = 4
+num_monomers = 5
 
 def indx_of_target(target):
     target = jnp.array(target)
@@ -72,6 +76,11 @@ def indx_of_target(target):
         for i in range(n_4):
             if jnp.array_equal(species4[i], target) or jnp.array_equal(species4[i], target_reversed):
                 return i + n_1 + n_2 + n_3
+            
+    elif target.shape[0] == 3 * 5:
+        for i in range(n_5):
+            if jnp.array_equal(species5[i], target) or jnp.array_equal(species5[i], target_reversed):
+                return i + n_1 + n_2 + n_3 +n_5
 
 inx_targets = [indx_of_target(t["structure"]) for t in targets]
 desired_yields = [t["desired_yield"] for t in targets]
@@ -81,7 +90,7 @@ euler_scheme = "sxyz"
 
 V = 1250.0
 kT = 1.0
-n = 4  # number of monomers
+n = 5  # number of monomers
 
 # Shape and energy helper functions
 a = 1.0  # distance of the center of the spheres from the BB COM
@@ -96,10 +105,10 @@ n_patches = n * 2  # 2 species of patches per monomer type
 n_species = n_patches + 1  # plus the common vertex species 0
 
 n_morse_vals = n_patches * (n_patches - 1) // 2 + n_patches  # all possible pair permutations plus same patch attraction (i,i)
-patchy_vals = jnp.full(n-1, 6.0)  # FIXME for optimization over specific attraction strengths
+patchy_vals = jnp.full(num_monomers-1, 6.0)  # FIXME for optimization over specific attraction strengths
 #patchy_vals = jnp.full(n_morse_vals, 4.0) 
 # Generate initial concentrations dynamically based on the number of monomers
-initial_concentrations = jnp.full(n, 0.00015)
+initial_concentrations = jnp.full(num_monomers, 0.15)
 concs = initial_concentrations
 
 init_params = jnp.concatenate([patchy_vals, concs])
@@ -147,11 +156,13 @@ shape1 = make_shape(1)
 shape2 = make_shape(2)
 shape3 = make_shape(3)
 shape4 = make_shape(4)
+shape5 = make_shape(5)
 
 rb1 = make_rb(1)
 rb2 = make_rb(2)
 rb3 = make_rb(3)
 rb4 = make_rb(4)
+rb5 = make_rb(5)
 
 rep_rmax_table = jnp.full((n_species, n_species), 2 * vertex_radius)
 rep_A_table = jnp.full((n_species, n_species), small_value).at[vertex_species, vertex_species].set(500.0)
@@ -241,6 +252,7 @@ def get_nmer_energy_fn(n):
 energy2 = jit(get_nmer_energy_fn(2))
 energy3 = jit(get_nmer_energy_fn(3))
 energy4 = jit(get_nmer_energy_fn(4))
+energy5 = jit(get_nmer_energy_fn(5))
 
 def hess(energy_fn, q, pos, species, opt_params):
     H = hessian(energy_fn)(q, pos, species, opt_params)
@@ -285,6 +297,10 @@ sigma1 = 3
 sigma2 = data['2_sigma']
 sigma3 = data['3_sigma']
 sigma4 = data['4_sigma']
+sigma5 = data['5_sigma']
+
+
+#pdb.set_trace()
 
 mon_energy_fn = lambda q, pos, species, opt_params: 0.0
 zrot_mod_sigma_1 = compute_zrot_mod_sigma(mon_energy_fn, rb1, shape1, data['1_pc_species'][1], patchy_vals,1)
@@ -298,6 +314,14 @@ log_z_1 = jnp.log(z_1s)
 zrot_mod_sigma_2 = compute_zrot_mod_sigma(energy2, rb2, shape2, jnp.array([1, 0, 2, 1, 0, 2]), patchy_vals)
 zrot_mod_sigma_3 = compute_zrot_mod_sigma(energy3, rb3, shape3, jnp.array([1, 0, 2, 1, 0, 2, 1, 0, 2]), patchy_vals)
 zrot_mod_sigma_4 = compute_zrot_mod_sigma(energy4, rb4, shape4, jnp.array([1, 0, 2, 1, 0, 2, 1, 0, 2, 1, 0, 2]), patchy_vals)
+zrot_mod_sigma_5 = compute_zrot_mod_sigma(energy5, rb5, shape5, jnp.array([1, 0, 2, 1, 0, 2, 1, 0, 2, 1, 0, 2, 1, 0, 2]), patchy_vals)
+
+def compute_log_z_5(species, sigma):
+    zvib_5 = compute_zvib(energy5, rb5, shape5, species, opt_params)
+    e0 = energy4(rb5, shape5, species, opt_params)
+    boltzmann_weight = jnp.exp(-e0 / kT)
+    z_5 = compute_zc(boltzmann_weight, zrot_mod_sigma_5, zvib_5, sigma, V)
+    return jnp.log(z_5)
 
 def get_log_z_all(opt_params):
     
@@ -321,15 +345,41 @@ def get_log_z_all(opt_params):
     
     def compute_log_z_4(species, sigma):
         zvib_4 = compute_zvib(energy4, rb4, shape4, species, opt_params)
-        e0 = energy4(rb3, shape4, species, opt_params)
+        e0 = energy4(rb4, shape4, species, opt_params)
         boltzmann_weight = jnp.exp(-e0 / kT)
         z_4 = compute_zc(boltzmann_weight, zrot_mod_sigma_4, zvib_4, sigma, V)
         return jnp.log(z_4)
 
-    log_z_4 = vmap(compute_log_z_4)(species4, sigma4)    
+    log_z_4 = vmap(compute_log_z_4)(species4, sigma4) 
 
-    log_z_all = jnp.concatenate([log_z_1, log_z_2, log_z_3, log_z_4]) 
-    
+    def compute_log_z_5(species, sigma):
+        zvib_5 = compute_zvib(energy5, rb5, shape5, species, opt_params)
+        e0 = energy4(rb5, shape5, species, opt_params)
+        boltzmann_weight = jnp.exp(-e0 / kT)
+        z_5 = compute_zc(boltzmann_weight, zrot_mod_sigma_5, zvib_5, sigma, V)
+        return jnp.log(z_5)
+
+    compute_log_z_5 = checkpoint(compute_log_z_5)
+
+    assert species5.shape[0] == sigma5.shape[0], "species5 and sigma5 must have the same length."
+
+    flat_species5 = species5.reshape(species5.shape[0], -1)
+    xs = jnp.concatenate([flat_species5, sigma5[:, None]], axis=-1)
+
+    def scan_fn(carry, x):
+        flat_species, sigma = x[:-1], x[-1]
+        species = flat_species.reshape(species5.shape[1:])
+        result = compute_log_z_5(species, sigma)
+        return carry, result
+
+    checkpoint_freq = 10 
+
+    scan_with_ckpt = functools.partial(checkpoint_scan, checkpoint_every=checkpoint_freq)
+
+    _, log_z_5 = scan_with_ckpt(scan_fn, None, xs)
+    log_z_5 = jnp.array(log_z_5)
+
+    log_z_all = jnp.concatenate([log_z_1, log_z_2, log_z_3, log_z_4, log_z_5])
     return log_z_all
 
 def safe_log(x, eps=1e-10):
@@ -342,9 +392,10 @@ for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
     key2 = f"{letter}_2_counts"
     key3 = f"{letter}_3_counts"
     key4 = f"{letter}_4_counts"
+    key5 = f"{letter}_5_counts"
     
-    if key1 in data and key2 in data and key3 in data and key4 in data:
-        monomer_counts.append(jnp.concatenate([data[key1], data[key2], data[key3], data[key4]]))
+    if key1 in data and key2 in data and key3 in data and key4 in data and key5 in data:
+        monomer_counts.append(jnp.concatenate([data[key1], data[key2], data[key3], data[key4], data[key5]]))
 
 nper_structure = jnp.array(monomer_counts)
 
@@ -445,7 +496,7 @@ def project(param, num_monomers):
 params = init_params
 num_params = len(params)
 mask = jnp.zeros(num_params)
-mask = mask.at[-3:].set(1.0)
+mask = mask.at[-num_monomers:].set(1.0)
 
 def masked_grads(grads):
     return grads * mask
