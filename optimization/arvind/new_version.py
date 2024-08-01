@@ -1,3 +1,4 @@
+import argparse
 import numpy as np
 import pickle
 import time
@@ -18,15 +19,33 @@ from jax.config import config
 config.update("jax_debug_nans", True)
 config.update("jax_enable_x64", True)
 
-SEED = 42
+# Argument parser setup
+parser = argparse.ArgumentParser(description='Optimization script for self-assembly simulations.')
+parser.add_argument('--seed', type=int, default=42, help='Random seed.')
+parser.add_argument('--filename', type=str, default='arvind_test.pkl', help='Input data file name.')
+parser.add_argument('--n_outer_iters', type=int, default=100, help='Number of outer iterations.')
+parser.add_argument('--learning_rate', type=float, default=1e-2, help='Learning rate for optimizer.')
+parser.add_argument('--use_custom_pairs', type=bool, default=True, help='Flag to use custom pairs.')
+parser.add_argument('--custom_pairs', type=str, default='[(2, 3), (4, 5), (6, 7), (8, 9)]', help='Custom pairs in the form of a list of tuples.')
+parser.add_argument('--target_structure', type=str, default='[1, 0, 2, 3, 0, 4, 5, 0, 6, 7, 0, 8, 9, 0, 10]', help='Target structure as a list of integers.')
+parser.add_argument('--desired_yield', type=float, default=0.5, help='Desired yield for the target structure.')
+parser.add_argument('--small_value', type=float, default=1e-12, help='Small value for repulsive potential.')
+parser.add_argument('--morse_narrow_alpha', type=float, default=5.0, help='Morse narrow alpha value.')
+parser.add_argument('--large_morse_eps', type=float, default=6.0, help='Large Morse epsilon value for patchy particles.')
+args = parser.parse_args()
+
+SEED = args.seed
 main_key = random.PRNGKey(SEED)
+
+# Parse custom pairs and target structure from string inputs
+custom_pairs = eval(args.custom_pairs)
+target_structure = eval(args.target_structure)
 
 # Example targets
 targets = [
-    {"structure": [1, 0, 2, 3, 0, 4, 5, 0, 6, 7, 0, 8, 9, 0, 10], "desired_yield": 0.5},
+    {"structure": target_structure, "desired_yield": args.desired_yield},
 ]
-use_custom_pairs = True
-custom_pairs = [(2, 3), (4, 5), (6, 7), (8,9)]
+use_custom_pairs = args.use_custom_pairs
 
 def load_species_combinations(filename):
     with open(filename, 'rb') as f:
@@ -34,7 +53,7 @@ def load_species_combinations(filename):
     return data
 
 # Load the species data from a file
-data = load_species_combinations('arvind_test.pkl')
+data = load_species_combinations(args.filename)
 
 # Determine the number of monomers dynamically from the data
 num_monomers = max(int(k.split('_')[0]) for k in data.keys() if k.endswith('_pc_species'))
@@ -66,7 +85,6 @@ def indx_of_target(target, species_data):
     
     return None  # Return None if the target is not found
 
-
 # Get the indices of the target structures
 inx_targets = [indx_of_target(t["structure"], species_data) for t in targets]
 desired_yields = [t["desired_yield"] for t in targets]
@@ -95,13 +113,13 @@ separation = 2.0
 noise = 1e-14
 vertex_radius = a
 patch_radius = 0.2 * a
-small_value = 1e-12
+small_value = args.small_value
 vertex_species = 0
 n_patches = n * 2  # 2 species of patches per monomer type
 n_species = n_patches + 1  # plus the common vertex species 0
 
 n_morse_vals = n_patches * (n_patches - 1) // 2 + n_patches  # all possible pair permutations plus same patch attraction (i,i)
-patchy_vals = jnp.full(n-1, 6.0)  # FIXME for optimization over specific attraction strengths
+patchy_vals = jnp.full(n-1, args.large_morse_eps)  # FIXME for optimization over specific attraction strengths
 initial_concentrations = jnp.full(num_monomers, 0.15)
 concs = initial_concentrations
 
@@ -148,11 +166,9 @@ def make_rb(size, separation=2.0, noise=1e-14):
 
     return jnp.array(rb, dtype=jnp.float64)
 
-
 sizes = range(1, num_monomers + 1)
 shapes = {size: make_shape(size) for size in sizes}
 rbs = {size: make_rb(size) for size in sizes}
-
 
 rb1 = rbs[1]
 shape1 = shapes[1]
@@ -162,7 +178,7 @@ rep_rmax_table = jnp.full((n_species, n_species), 2 * vertex_radius)
 rep_A_table = jnp.full((n_species, n_species), small_value).at[vertex_species, vertex_species].set(500.0)
 rep_alpha_table = jnp.full((n_species, n_species), 2.5)
 
-morse_narrow_alpha = 5.0
+morse_narrow_alpha = args.morse_narrow_alpha
 morse_alpha_table = jnp.full((n_species, n_species), morse_narrow_alpha)
 
 def generate_idx_pairs(n_species):
@@ -316,24 +332,21 @@ def get_log_z_all(opt_params, zrot_mod_sigma_values):
         species = data[f'{size}_pc_species']
         sigma = data[f'{size}_sigma']
         
-        if size <= 4:
-            log_z = vmap(lambda sp, sg: compute_log_z(size, sp, sg))(species, sigma)
-        else:
-            compute_log_z_ckpt = checkpoint(lambda sp, sg: compute_log_z(size, sp, sg))
-            flat_species = species.reshape(species.shape[0], -1)
-            xs = jnp.concatenate([flat_species, sigma[:, None]], axis=-1)
-            
-            def scan_fn(carry, x):
-                flat_species, sigma = x[:-1], x[-1]
-                species_new = flat_species.reshape(species.shape[1:])
-                result = compute_log_z_ckpt(species_new, sigma)
-                return carry, result
-            
-            checkpoint_freq = 10
-            scan_with_ckpt = functools.partial(checkpoint_scan, checkpoint_every=checkpoint_freq)
-            _, log_z = scan_with_ckpt(scan_fn, None, xs)
-            log_z = jnp.array(log_z)
-        
+        compute_log_z_ckpt = checkpoint(lambda sp, sg: compute_log_z(size, sp, sg))
+        flat_species = species.reshape(species.shape[0], -1)
+        xs = jnp.concatenate([flat_species, sigma[:, None]], axis=-1)
+
+        def scan_fn(carry, x):
+            flat_species, sigma = x[:-1], x[-1]
+            species_new = flat_species.reshape(species.shape[1:])
+            result = compute_log_z_ckpt(species_new, sigma)
+            return carry, result
+
+        checkpoint_freq = 10
+        scan_with_ckpt = functools.partial(checkpoint_scan, checkpoint_every=checkpoint_freq)
+        _, log_z = scan_with_ckpt(scan_fn, None, xs)
+        log_z = jnp.array(log_z)
+
         log_z_all.append(log_z)
     
     log_z_all = jnp.concatenate(log_z_all)
@@ -353,7 +366,6 @@ for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
             counts_list.append(data[key])
     if counts_list:  
         monomer_counts.append(jnp.concatenate(counts_list))
-
 
 nper_structure = jnp.array(monomer_counts)
 
@@ -455,10 +467,10 @@ def masked_grads(grads):
     return grads * mask
 
 our_grad_fn = jit(value_and_grad(ofer_grad_fn, has_aux=True))
-outer_optimizer = optax.adam(1e-2)
+outer_optimizer = optax.adam(args.learning_rate)
 opt_state = outer_optimizer.init(params)
 
-n_outer_iters = 100
+n_outer_iters = args.n_outer_iters
 outer_losses = []
 
 if use_custom_pairs and custom_pairs is not None:
