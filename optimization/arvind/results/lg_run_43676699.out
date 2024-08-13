@@ -1,0 +1,33 @@
+Results for species size 2:
+nrandom: 1000, zrot_mod_sigma: 502.43618543756344
+nrandom: 10000, zrot_mod_sigma: 498.06683839353565
+nrandom: 50000, zrot_mod_sigma: 493.60612198951793
+nrandom: 100000, zrot_mod_sigma: 494.2189151820561
+nrandom: 200000, zrot_mod_sigma: 493.5939352318008
+nrandom: 500000, zrot_mod_sigma: 496.0118316289843
+
+Results for species size 3:
+nrandom: 1000, zrot_mod_sigma: 2931.3515976049116
+nrandom: 10000, zrot_mod_sigma: 4580.786708495582
+nrandom: 50000, zrot_mod_sigma: 4154.948290072985
+nrandom: 100000, zrot_mod_sigma: 3446.943825239965
+nrandom: 200000, zrot_mod_sigma: 3597.8549220447912
+nrandom: 500000, zrot_mod_sigma: 4830.978276506262
+
+Results for species size 4:
+nrandom: 1000, zrot_mod_sigma: 41080.43349776504
+nrandom: 10000, zrot_mod_sigma: 358444.3481246183
+nrandom: 50000, zrot_mod_sigma: 447873.67485215387
+nrandom: 100000, zrot_mod_sigma: 158733.23936997817
+nrandom: 200000, zrot_mod_sigma: 238908.22903573434
+nrandom: 500000, zrot_mod_sigma: 1003878.6159894392
+
+Results for species size 5:
+nrandom: 1000, zrot_mod_sigma: 954169.5790845953
+nrandom: 10000, zrot_mod_sigma: 52010213.06163017
+nrandom: 50000, zrot_mod_sigma: 121326302.5659966
+nrandom: 100000, zrot_mod_sigma: 18569710.09453299
+nrandom: 200000, zrot_mod_sigma: 46530914.582190916
+nrandom: 500000, zrot_mod_sigma: 540968551.3853244
+
+Job completed

@@ -1,0 +1,31 @@
+/net/b-nfs04-p/data/brenner_lab/share/Lab/rotation_livia/self-assembly-toolkit/optimization/arvind/morse_new.py:29: DeprecationWarning: Accessing jax.config via the jax.config submodule is deprecated.
+  from jax.config import config
+2024-08-13 15:04:25.056109: W external/tsl/tsl/framework/bfc_allocator.cc:296] Allocator (GPU_0_bfc) ran out of memory trying to allocate 12.89GiB with freed_by_count=0. The caller indicates that this is not a failure, but this may mean that there could be performance gains if more memory were available.
+Traceback (most recent call last):
+  File "/net/b-nfs04-p/data/brenner_lab/share/Lab/rotation_livia/self-assembly-toolkit/optimization/arvind/morse_new.py", line 465, in <module>
+    results = test_nrandom_effect(nrandom_values, energy_fn, q, pos, species, opt_params)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/net/b-nfs04-p/data/brenner_lab/share/Lab/rotation_livia/self-assembly-toolkit/optimization/arvind/morse_new.py", line 376, in test_nrandom_effect
+    zrot_mod_sigma = compute_zrot_mod_sigma(energy_fn, q, pos, species, opt_params, nrandom=nrandom)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/net/b-nfs04-p/data/brenner_lab/share/Lab/rotation_livia/self-assembly-toolkit/optimization/arvind/morse_new.py", line 367, in compute_zrot_mod_sigma
+    Js = vmap(nu_fn)(nus)
+         ^^^^^^^^^^^^^^^^
+  File "/net/b-nfs04-p/data/brenner_lab/share/Lab/rotation_livia/self-assembly-toolkit/optimization/arvind/morse_new.py", line 366, in <lambda>
+    nu_fn = lambda nu: jnp.abs(jnp.linalg.det(jacfwd(ftilde)(nu)))
+                                              ^^^^^^^^^^^^^^^^^^
+  File "/net/b-nfs04-p/data/brenner_lab/share/Lab/rotation_livia/self-assembly-toolkit/optimization/arvind/morse_new.py", line 362, in ftilde
+    return utils.add_variables_all(q_tilde, nu_tilde)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/net/b-nfs04-p/data/brenner_lab/share/Lab/rotation_livia/self-assembly-toolkit/optimization/arvind/utils.py", line 38, in add_variables_all
+    return jnp.reshape(vmap(add_variables, in_axes=(0, 0))(mas_temp, mbs_temp), mas.shape)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/net/b-nfs04-p/data/brenner_lab/share/Lab/rotation_livia/self-assembly-toolkit/optimization/arvind/utils.py", line 28, in add_variables
+    Ma = convert_to_matrix(ma)
+         ^^^^^^^^^^^^^^^^^^^^^
+  File "/net/b-nfs04-p/data/brenner_lab/share/Lab/rotation_livia/self-assembly-toolkit/optimization/arvind/utils.py", line 10, in convert_to_matrix
+    return jnp.matmul(T, R)
+           ^^^^^^^^^^^^^^^^
+jaxlib.xla_extension.XlaRuntimeError: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 13840777216 bytes.
+--------------------
+For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
